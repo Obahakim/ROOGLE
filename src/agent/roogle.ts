@@ -1,0 +1,248 @@
+/**
+ * src/agent/roogle.ts
+ *
+ * ROOGLE — Main Orchestrator (improved decision making + Grok prioritization)
+ *
+ * Uses LLM (Grok preferred, then OpenAI, then simulator) + all tools (Self + Discovery).
+ * Better at understanding intent, especially "what can I do" / capabilities questions.
+ * Discovery tools attempt real Sphere SDK when available.
+ *
+ * Key behaviors:
+ * - Clean user message (no names or tool names)
+ * - All reasoning in `thoughts`
+ * - Confirmation flow preserved
+ */
+
+import { SYSTEM_PROMPT } from './prompts/system';
+import type {
+  UserMessage,
+  AgentMessage,
+  RoogleResponse,
+  ToolCall,
+} from '../interfaces/message';
+import { getAllTools, getToolByName } from './tools';
+import { callLLMWithTools } from './llm';
+import { getSphereClient } from '../sphere/client';
+
+/**
+ * Detects affirmative answers for confirmation flow.
+ */
+function isAffirmative(content: string): boolean {
+  const lower = content.toLowerCase().trim();
+  return (
+    lower === 'yes' ||
+    lower === 'yeah' ||
+    lower === 'yep' ||
+    lower === 'sure' ||
+    lower === 'go ahead' ||
+    lower.includes('confirm') ||
+    (lower.includes('okay') && lower.length < 10)
+  );
+}
+
+/**
+ * Determines whether a tool name is considered "sensitive" and requires explicit confirmation.
+ */
+function isSensitiveTool(toolName: string): boolean {
+  return toolName === 'send_simple_message' || toolName === 'send_tokens';
+}
+
+/**
+ * Detects if the user request is about sending/transferring tokens or value (not just text messages).
+ * Examples: "send 2 sol to @user", "transfer 10 tokens to alice", "pay 5 UCT to 0x..."
+ */
+function isSendTokensIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  const hasSendWord = lower.includes('send') || lower.includes('transfer') || lower.includes('pay') || lower.includes('give');
+  // Look for amount pattern (number) + common token words or to a recipient
+  const hasAmount = /\b\d+(\.\d+)?\b/.test(lower);
+  const hasTokenHint = lower.includes('sol') || lower.includes('uct') || lower.includes('token') || lower.includes('tokens');
+  const hasRecipient = lower.includes('to ') || lower.includes('@');
+  return hasSendWord && (hasAmount || hasTokenHint) && hasRecipient;
+}
+
+/**
+ * Main entry point for processing a user message.
+ */
+export async function handleUserMessage(
+  message: UserMessage,
+  conversationHistory: (UserMessage | AgentMessage)[] = []
+): Promise<RoogleResponse> {
+  const userText = message.content || '';
+  console.log('[ROOGLE] Received:', userText);
+
+  // === 1. Handle explicit "yes" confirmation from previous turn ===
+  const lastAgent = [...conversationHistory]
+    .reverse()
+    .find((m) => (m as AgentMessage).role === 'assistant') as AgentMessage | undefined;
+
+  if (lastAgent && lastAgent.content.toLowerCase().includes('confirm') && isAffirmative(userText)) {
+    return {
+      message:
+        "Thank you! I've noted your confirmation. In a full version I would now safely complete the action using the Sphere SDK. Everything stays in demo mode for now.",
+      thoughts: 'User confirmed the previous sensitive action. Proceeding with demo acknowledgement.',
+      toolCalls: [],
+    };
+  }
+
+  // === 2. Call the LLM for decision (Grok preferred → OpenAI → simulator)
+  // Passes ALL tools (Self + Discovery) so the model can intelligently choose.
+  const availableTools = getAllTools();
+
+  const llmResponse = await callLLMWithTools(
+    SYSTEM_PROMPT,
+    [...conversationHistory, message],
+    availableTools,
+    { temperature: 0.6 }
+  );
+  // Provider choice (Grok / OpenAI / Simulator) is logged inside llm/index.ts
+
+  let finalMessage = llmResponse.message || '';
+  let thoughts = llmResponse.thoughts;
+  let executedToolCalls: ToolCall[] = llmResponse.toolCalls || [];
+
+  // === Improve intent detection for sending tokens/value (Phase 9)
+  // Prefer send_tokens over send_simple_message for value transfers.
+  if (isSendTokensIntent(userText)) {
+    const hasSendTokensCall = executedToolCalls.some(c => c.name === 'send_tokens');
+    const hasWrongSendCall = executedToolCalls.some(c => c.name === 'send_simple_message');
+    if (!hasSendTokensCall) {
+      // Override or inject send_tokens call
+      const toMatch = userText.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
+      const amountMatch = userText.match(/\b(\d+(?:\.\d+)?)\b/);
+      const tokenMatch = userText.match(/\b(sol|uct|token|tokens)\b/i);
+      const to = toMatch ? toMatch[1] : 'the recipient';
+      const amount = amountMatch ? amountMatch[1] : 'some';
+      const token = tokenMatch ? tokenMatch[1].toUpperCase() : 'tokens';
+
+      executedToolCalls = [{ name: 'send_tokens', arguments: { to, amount, token } }];
+      thoughts = (thoughts || '') + ` [Intent] Detected send tokens/value request. Overrode to send_tokens tool.`;
+    }
+  }
+
+  // === Extra intent handling for common "what can I do / capabilities" questions
+  // This makes ROOGLE feel smarter even if the LLM chooses a direct response.
+  const lowerText = userText.toLowerCase();
+  const isCapabilitiesQuery = lowerText.includes('what can you do') ||
+                              lowerText.includes('what can i do') ||
+                              lowerText.includes('how can i') ||
+                              lowerText.includes('what are my options') ||
+                              lowerText.includes('what is unicity') ||
+                              (lowerText.includes('help') && lowerText.length < 40);
+
+  if (!executedToolCalls.length && !finalMessage && isCapabilitiesQuery) {
+    finalMessage = "I'm here to make Unicity Sphere simple and useful. I can give safe balance summaries, prepare messages, send tokens/value (always confirm first), or intelligently find and connect you to specialist agents for earning yield, portfolio strategies, privacy features, and more. What are you trying to do?";
+    thoughts = (thoughts || '') + ' Detected capabilities/intent question and provided a helpful Unicity-focused overview.';
+  }
+
+  // === 3. Centralized Real vs Mock SDK decision (single source of truth)
+  const sphereClient = getSphereClient();
+  await sphereClient.initialize(); // ensure init
+  const isRealSdk = sphereClient.isUsingRealSdk();
+  console.log(`[ROOGLE] SDK execution mode: ${isRealSdk ? 'REAL SDK' : 'MOCK'}`);
+
+  if (executedToolCalls.length > 0) {
+    const firstCall = executedToolCalls[0];
+    const toolName = firstCall.name;
+    const args = firstCall.arguments || {};
+
+    // Safety: intercept sensitive actions for explicit confirmation (Self Tools)
+    if (isSensitiveTool(toolName)) {
+      const confirmTool = getToolByName('confirm_action');
+      if (confirmTool) {
+        const actionDesc = toolName === 'send_tokens' ? 'send those tokens' : 'send that message';
+        const confirmText = await confirmTool.execute({
+          action: actionDesc,
+          details: userText,
+        });
+
+        return {
+          message: confirmText,
+          thoughts: thoughts || `LLM decided to use ${toolName}. Requiring confirmation before proceeding. (mode: ${isRealSdk ? 'REAL' : 'MOCK'})`,
+          requiresConfirmation: true,
+          confirmationMessage: confirmText,
+          toolCalls: executedToolCalls,
+        };
+      }
+    }
+
+    const tool = getToolByName(toolName);
+    if (tool) {
+      try {
+        let result: any;
+
+        if (isRealSdk) {
+          // === REAL SDK execution path (centralized) ===
+          if (toolName === 'send_tokens') {
+            result = await sphereClient.sendTokens(args.to, args.amount, args.token);
+          } else if (toolName === 'get_balance') {
+            result = await sphereClient.getBalance(args.asset);
+          } else if (toolName === 'search_agents') {
+            const raw = await sphereClient.searchAgents(args.query || '');
+            result = { query: args.query, matches: raw, count: raw.length };
+          } else if (toolName === 'recommend_best_agent') {
+            const raw = await sphereClient.searchAgents(args.query || '');
+            result = { bestAgent: raw[0] || {}, score: 0.91, reason: 'real SDK recommendation' };
+          } else if (toolName === 'hand_off_to_agent') {
+            const h = await sphereClient.handoffToAgent(args.targetAgentId || '', args.context || args.query || '');
+            result = { targetAgentId: args.targetAgentId, ...h };
+          } else {
+            // other tools use their execute even in real
+            result = await tool.execute(args);
+          }
+          console.log(`[ROOGLE] ${toolName} executed via REAL SDK path`);
+        } else {
+          // === MOCK / placeholder path ===
+          result = await tool.execute(args);
+          console.log(`[ROOGLE] ${toolName} executed via MOCK path`);
+        }
+
+        // === Special handling for Discovery Tools / handoff ===
+        if (toolName === 'hand_off_to_agent' || (result && result.targetAgentId)) {
+          const handoffData = result || {};
+          const cleanMessage = "I've found a specialist who can help you with that. I'll connect you now.";
+          return {
+            message: cleanMessage,
+            thoughts: `${thoughts || ''} [Handoff] Target: ${handoffData.targetAgentName || handoffData.targetAgentId || 'specialist'} (name hidden from user). Reason: ${handoffData.reason || 'best match for request'}. Context: ${handoffData.context || userText} (mode: ${isRealSdk ? 'REAL' : 'MOCK'})`,
+            toolCalls: executedToolCalls,
+            handoff: {
+              targetAgentId: handoffData.targetAgentId || 'unknown-specialist',
+              targetAgentName: handoffData.targetAgentName,
+              reason: handoffData.reason || 'Matches user request for specialist help.',
+              context: handoffData.context || userText,
+            },
+          };
+        }
+
+        // For search/recommend in real or mock
+        if (toolName === 'search_agents' || toolName === 'recommend_best_agent') {
+          finalMessage = isRealSdk 
+            ? "Let me find the best specialist in the Sphere to help with that (using real data)."
+            : "Let me find the best specialist in the Sphere to help with that.";
+        } else {
+          finalMessage = typeof result === 'string' ? result : String(result);
+        }
+      } catch (err) {
+        console.error('[ROOGLE] Tool execution error:', err);
+        finalMessage = "Sorry, something went wrong while trying to help with that. Can you try again?";
+      }
+    }
+  } else if (!finalMessage) {
+    // LLM gave no message and no tools — give a helpful Unicity-focused fallback
+    if (isCapabilitiesQuery) {
+      finalMessage = "In Unicity Sphere I can help with: safe balance summaries, preparing messages, sending tokens/value (with confirmation), or discovering specialist agents for yield/staking, portfolio help, privacy, and more. Just tell me what you want to do!";
+    } else {
+      finalMessage = "I'm here to help in Unicity Sphere — check balances safely, prepare messages, send tokens with confirmation, or find the right specialist agent. What would you like to do?";
+    }
+    thoughts = (thoughts || '') + ' Provided friendly Unicity-oriented fallback response.';
+  }
+
+  // === 4. Return clean response ===
+  const response: RoogleResponse = {
+    message: finalMessage,
+    thoughts: thoughts,
+    toolCalls: executedToolCalls.length > 0 ? executedToolCalls : undefined,
+  };
+
+  return response;
+}
