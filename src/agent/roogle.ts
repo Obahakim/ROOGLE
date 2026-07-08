@@ -139,7 +139,15 @@ export async function handleUserMessage(
   const sphereClient = getSphereClient();
   await sphereClient.initialize(); // ensure init
   const isRealSdk = sphereClient.isUsingRealSdk();
-  console.log(`[ROOGLE] SDK execution mode: ${isRealSdk ? 'REAL SDK' : 'MOCK'}`);
+  const forceRealSdk = sphereClient.isForceRealSdk();
+  // When FORCE_REAL_SDK is enabled we always route through the real execution
+  // path below — the SphereClient methods themselves fall back gracefully to
+  // mock/demo output if the SDK isn't actually connected, so this is safe.
+  const preferRealExecution = isRealSdk || forceRealSdk;
+  console.log(
+    `[ROOGLE] SDK execution mode: ${isRealSdk ? 'REAL SDK' : 'MOCK'}` +
+    `${forceRealSdk ? ' (FORCE_REAL_SDK enabled — real execution path preferred)' : ''}`
+  );
 
   if (executedToolCalls.length > 0) {
     const firstCall = executedToolCalls[0];
@@ -158,7 +166,7 @@ export async function handleUserMessage(
 
         return {
           message: confirmText,
-          thoughts: thoughts || `LLM decided to use ${toolName}. Requiring confirmation before proceeding. (mode: ${isRealSdk ? 'REAL' : 'MOCK'})`,
+          thoughts: thoughts || `LLM decided to use ${toolName}. Requiring confirmation before proceeding. (mode: ${isRealSdk ? 'REAL' : forceRealSdk ? 'FORCE-REAL (attempting)' : 'MOCK'})`,
           requiresConfirmation: true,
           confirmationMessage: confirmText,
           toolCalls: executedToolCalls,
@@ -171,8 +179,14 @@ export async function handleUserMessage(
       try {
         let result: any;
 
-        if (isRealSdk) {
+        if (preferRealExecution) {
           // === REAL SDK execution path (centralized) ===
+          // Entered when the SDK is actually connected (isRealSdk) OR when
+          // FORCE_REAL_SDK is enabled. SphereClient methods (sendTokens,
+          // getBalance, searchAgents, handoffToAgent) attempt the real SDK
+          // call first and fall back to a clearly-logged mock response only
+          // if the SDK isn't connected or the call errors — so this branch
+          // is always safe to take.
           if (toolName === 'send_tokens') {
             result = await sphereClient.sendTokens(args.to, args.amount, args.token);
           } else if (toolName === 'get_balance') {
@@ -190,7 +204,7 @@ export async function handleUserMessage(
             // other tools use their execute even in real
             result = await tool.execute(args);
           }
-          console.log(`[ROOGLE] ${toolName} executed via REAL SDK path`);
+          console.log(`[ROOGLE] ${toolName} executed via REAL SDK path${!isRealSdk && forceRealSdk ? ' (FORCE_REAL_SDK attempt — SDK not connected, method fell back internally)' : ''}`);
         } else {
           // === MOCK / placeholder path ===
           result = await tool.execute(args);
@@ -206,11 +220,11 @@ export async function handleUserMessage(
             thoughts: `${thoughts || ''} [Handoff] Target: ${handoffData.targetAgentName || handoffData.targetAgentId || 'specialist'} (name hidden from user). Reason: ${handoffData.reason || 'best match for request'}. Context: ${handoffData.context || userText} (mode: ${isRealSdk ? 'REAL' : 'MOCK'})`,
             toolCalls: executedToolCalls,
             handoff: {
-              targetAgentId: handoffData.targetAgentId || 'unknown-specialist',
-              targetAgentName: handoffData.targetAgentName,
-              reason: handoffData.reason || 'Matches user request for specialist help.',
-              context: handoffData.context || userText,
-            },
+  targetAgentId: handoffData.targetAgentId || handoffData.id,
+  targetAgentName: handoffData.targetAgentName,
+  reason: handoffData.reason || 'Matches user request for specialist help.',
+  context: handoffData.context || userText,
+},
           };
         }
 
