@@ -220,11 +220,11 @@ export async function handleUserMessage(
             thoughts: `${thoughts || ''} [Handoff] Target: ${handoffData.targetAgentName || handoffData.targetAgentId || 'specialist'} (name hidden from user). Reason: ${handoffData.reason || 'best match for request'}. Context: ${handoffData.context || userText} (mode: ${isRealSdk ? 'REAL' : 'MOCK'})`,
             toolCalls: executedToolCalls,
             handoff: {
-  targetAgentId: handoffData.targetAgentId || handoffData.id,
-  targetAgentName: handoffData.targetAgentName,
-  reason: handoffData.reason || 'Matches user request for specialist help.',
-  context: handoffData.context || userText,
-},
+              targetAgentId: handoffData.targetAgentId || 'unknown-specialist',
+              targetAgentName: handoffData.targetAgentName,
+              reason: handoffData.reason || 'Matches user request for specialist help.',
+              context: handoffData.context || userText,
+            },
           };
         }
 

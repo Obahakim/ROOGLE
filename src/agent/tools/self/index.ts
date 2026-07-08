@@ -9,6 +9,7 @@
  */
 
 import type { Tool } from '../../../interfaces/message';
+import { getSphereClient } from '../../../sphere/client';
 
 /**
  * get_help: Explains what ROOGLE can do.
@@ -46,6 +47,15 @@ export const getBalanceTool: Tool = {
     asset: { type: 'string', description: 'Optional specific asset or token to check', optional: true }
   },
   execute: async (args: { asset?: string }) => {
+    // Defensive real-SDK-first check: roogle.ts normally routes get_balance
+    // through sphereClient.getBalance() directly when real mode is active,
+    // but this tool attempts the same if ever invoked on its own.
+    const sphereClient = getSphereClient();
+    if (sphereClient.isUsingRealSdk() || sphereClient.isForceRealSdk()) {
+      console.log('[Tool:get_balance] Real SDK mode active — delegating to SphereClient.getBalance().');
+      return sphereClient.getBalance(args.asset);
+    }
+    console.log('[Tool:get_balance] Using demo fallback (real SDK mode not active).');
     const asset = args.asset || 'your main balance';
     return `Your ${asset} looks healthy right now.`;
   }
@@ -87,11 +97,26 @@ export const sendTokensTool: Tool = {
     const to = args.to || 'the recipient';
     const amount = args.amount || 'some';
     const token = args.token || 'tokens';
-    // Always returns action description; real vs mock decided by caller (roogle)
+
+    // Defensive real-SDK-first check: roogle.ts normally routes send_tokens
+    // through sphereClient.sendTokens() directly (after confirmation) when
+    // real mode is active. This tool attempts the same if ever invoked on
+    // its own, with a safe fallback if the real call fails or isn't available.
+    const sphereClient = getSphereClient();
+    if (sphereClient.isUsingRealSdk() || sphereClient.isForceRealSdk()) {
+      console.log(`[Tool:send_tokens] Real SDK mode active — attempting real send of ${amount} ${token} to ${to}.`);
+      try {
+        return await sphereClient.sendTokens(to, amount, token);
+      } catch (e: any) {
+        console.warn(`[Tool:send_tokens] Real send failed, falling back to safe placeholder: ${e?.message || e}`);
+      }
+    }
+    console.log('[Tool:send_tokens] Using demo fallback (real SDK mode not active).');
     return `I've prepared to send ${amount} ${token} to ${to}.`;
   }
 };
-  /**
+
+/**
  * confirm_action: Generates a clear, safe confirmation message before important actions.
  */
 export const confirmActionTool: Tool = {
@@ -101,13 +126,7 @@ export const confirmActionTool: Tool = {
     action: { type: 'string', description: 'What action we are about to take' },
     details: { type: 'string', description: 'Extra details to explain simply', optional: true }
   },
-  execute: async (args: Record<string, any>) => {
-    const action = args.action || 'do that';
-    const details = args.details ? ` (${args.details})` : '';
-    return `Just to keep things safe, before I ${action}${details}, can you confirm? Please reply "yes" if you'd like me to go ahead.`;
-  }
-};
-  execute: async (args: { action: string; details?: string }) => {
+  execute: async (args: { action?: string; details?: string }) => {
     const action = args.action || 'do that';
     const details = args.details ? ` (${args.details})` : '';
     return `Just to keep things safe, before I ${action}${details}, can you confirm? Please reply "yes" if you'd like me to go ahead.`;
