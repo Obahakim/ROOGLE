@@ -185,7 +185,7 @@ export async function handleUserMessage(
             result = { bestAgent: raw[0] || {}, score: 0.91, reason: 'real SDK recommendation' };
           } else if (toolName === 'hand_off_to_agent') {
             const h = await sphereClient.handoffToAgent(args.targetAgentId || '', args.context || args.query || '');
-            result = { targetAgentId: args.targetAgentId, ...h };
+            result = { ...h, targetAgentId: args.targetAgentId };
           } else {
             // other tools use their execute even in real
             result = await tool.execute(args);

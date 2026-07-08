@@ -102,8 +102,8 @@ export const confirmActionTool: Tool = {
     action: { type: 'string', description: 'What action we are about to take' },
     details: { type: 'string', description: 'Extra details to explain simply', optional: true }
   },
-  execute: async (args: { action: string; details?: string }) => {
-    const action = args.action || 'do that';
+  execute: async (args: Record<string, any>) => {
+    const action = (args.action as string) || 'do that';
     const details = args.details ? ` (${args.details})` : '';
     return `Just to keep things safe, before I ${action}${details}, can you confirm? Please reply "yes" if you'd like me to go ahead.`;
   }
