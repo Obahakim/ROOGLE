@@ -2,11 +2,12 @@
   "name": "roogle",
   "version": "0.1.0",
   "description": "ROOGLE — Plain-English conversational orchestrator for Unicity Sphere",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "start": "tsx adapters/iframe/web-entry.ts",
     "test": "vitest",
     "lint": "eslint .",
     "start:iframe": "tsx adapters/iframe/web-entry.ts",
@@ -16,6 +17,7 @@
   "dependencies": {
     "@unicitylabs/sphere-sdk": "^0.10.0",
     "dotenv": "^17.4.2",
+    "ws": "^8.18.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
