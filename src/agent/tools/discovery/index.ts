@@ -11,6 +11,7 @@
  */
 
 import type { Tool } from '../../../interfaces/message';
+import { getSphereClient } from '../../../sphere/client';
 
 // ============================================
 // (Minimal) local fallback mock data if SDK completely unavailable
@@ -52,6 +53,26 @@ export const searchAgentsTool: Tool = {
   },
   execute: async (args: { query?: string }) => {
     const query = args.query || '';
+
+    // Defensive real-SDK-first check: roogle.ts normally routes search_agents
+    // through sphereClient.searchAgents() directly when real mode is active.
+    // This tool attempts the same if ever invoked on its own, falling back
+    // to the local mock list below if the SDK isn't available or errors.
+    const sphereClient = getSphereClient();
+    if (sphereClient.isUsingRealSdk() || sphereClient.isForceRealSdk()) {
+      try {
+        console.log(`[Tool:search_agents] Real SDK mode active — attempting real search for "${query}".`);
+        const raw = await sphereClient.searchAgents(query);
+        if (raw && raw.length > 0) {
+          const matches = raw.map(mapToAgentShape);
+          return { query, matches, count: matches.length };
+        }
+      } catch (e: any) {
+        console.warn(`[Tool:search_agents] Real search failed, falling back to local mock: ${e?.message || e}`);
+      }
+    }
+    console.log('[Tool:search_agents] Using local demo fallback data.');
+
     // Pure mock implementation. Real path is handled centrally in roogle.ts
     const matches = FALLBACK_SPECIALISTS
       .filter((agent) =>

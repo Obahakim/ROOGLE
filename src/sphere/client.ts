@@ -21,12 +21,23 @@ export interface SphereClientConfig {
   apiKey?: string;
   agentId?: string;
   network?: 'testnet' | 'mainnet' | 'devnet';
+  /** Force strong preference for real Sphere SDK execution (defaults to FORCE_REAL_SDK env var) */
+  forceRealSdk?: boolean;
+}
+
+/**
+ * Reads FORCE_REAL_SDK from the environment. Accepts "true"/"1" (case-insensitive).
+ */
+function readForceRealSdkEnv(): boolean {
+  const raw = (process.env.FORCE_REAL_SDK || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1';
 }
 
 export class SphereClient {
   private sphere: any = null;
   private initialized = false;
   private usingRealSdk = false;
+  private forceRealSdk: boolean;
   private config: SphereClientConfig;
 
   constructor(config: SphereClientConfig = {}) {
@@ -34,6 +45,9 @@ export class SphereClient {
       network: (process.env.SPHERE_NETWORK as any) || 'testnet',
       ...config,
     };
+    // FORCE_REAL_SDK env var (or explicit config) makes ROOGLE strongly prefer
+    // real Sphere SDK execution in production, only falling back on actual errors.
+    this.forceRealSdk = config.forceRealSdk ?? readForceRealSdkEnv();
   }
 
   /**
@@ -42,6 +56,17 @@ export class SphereClient {
    */
   public isUsingRealSdk(): boolean {
     return this.usingRealSdk;
+  }
+
+  /**
+   * Returns true if Forced Real SDK mode is enabled (via FORCE_REAL_SDK=true
+   * or explicit config). This does not by itself guarantee the SDK connected
+   * successfully — check isUsingRealSdk() for that — but it signals that
+   * callers should strongly prefer real execution paths and only fall back
+   * to mock/demo behavior on an actual error.
+   */
+  public isForceRealSdk(): boolean {
+    return this.forceRealSdk;
   }
 
   private async initializeIfNeeded(): Promise<void> {
@@ -67,9 +92,19 @@ export class SphereClient {
     const oracleApiKey = process.env.SPHERE_ORACLE_API_KEY;
     const mnemonic = process.env.SPHERE_MNEMONIC;
 
+    if (this.forceRealSdk) {
+      console.log('[SphereClient] 🚀 FORCE_REAL_SDK is enabled — strongly preferring real Sphere SDK execution. Will only fall back to mock on an actual error.');
+    } else {
+      console.log('[SphereClient] Running in normal mode (real Sphere SDK is still attempted first; falls back to mock only on error).');
+    }
+
     console.log(`[SphereClient] Attempting REAL Sphere SDK initialization (network=${network})...`);
 
-    if (!mnemonic) {
+    if (mnemonic) {
+      console.log('[SphereClient]   SPHERE_MNEMONIC is present — will use it for a persistent real identity.');
+    } else if (this.forceRealSdk) {
+      console.warn('[SphereClient]   ⚠️ FORCE_REAL_SDK is enabled but no SPHERE_MNEMONIC is set — will auto-generate an EPHEMERAL identity. Set SPHERE_MNEMONIC in production for a persistent agent.');
+    } else {
       console.log('[SphereClient]   No SPHERE_MNEMONIC found — will attempt auto-generate (ephemeral identity).');
     }
 
@@ -106,10 +141,10 @@ export class SphereClient {
       this.initialized = true;
 
       const id = sphere.identity?.nametag || sphere.identity?.directAddress || this.config.agentId || 'unknown';
-      console.log(`[SphereClient] ✅ Real Sphere SDK connected successfully. Identity: ${id}`);
+      console.log(`[SphereClient] ✅ Real Sphere SDK connected successfully${this.forceRealSdk ? ' (Forced Real SDK mode)' : ''}. Identity: ${id}`);
     } catch (err: any) {
       const errorMsg = err?.message || String(err);
-      console.error(`[SphereClient] ❌ Real Sphere SDK initialization FAILED: ${errorMsg}`);
+      console.error(`[SphereClient] ❌ Real Sphere SDK initialization FAILED${this.forceRealSdk ? ' (Forced Real SDK mode was enabled)' : ''}: ${errorMsg}`);
 
       if (errorMsg.toLowerCase().includes('network') || !process.env.SPHERE_NETWORK) {
         console.error('   Hint: Set SPHERE_NETWORK=testnet (or mainnet) in your .env file.');
@@ -252,34 +287,60 @@ export class SphereClient {
 
   /**
    * Get balance using real SDK if active.
+   * Uses PaymentsModule.getAssets() (@unicitylabs/sphere-sdk) which returns
+   * Asset[] with { coinId, symbol, totalAmount, ... }.
    */
   async getBalance(asset?: string) {
     await this.initializeIfNeeded();
-    if (this.sphere) {
+    if (this.sphere?.payments?.getAssets) {
       try {
-        const assets = await (this.sphere.payments?.getAssets?.() || Promise.resolve([]));
-        return `Your real ${asset || 'main'} balance via Sphere SDK: ${assets.length} asset(s).`;
+        console.log(`[SphereClient] Attempting REAL getBalance via Sphere SDK payments.getAssets()${asset ? ` (coinId=${asset})` : ''}...`);
+        const assets = await this.sphere.payments.getAssets(asset);
+        if (!assets || assets.length === 0) {
+          console.log('[SphereClient] ✅ REAL getBalance succeeded (no assets found).');
+          return `Your ${asset || 'balance'} looks empty right now (no assets found via Sphere SDK).`;
+        }
+        const summary = assets.map((a: any) => `${a.totalAmount} ${a.symbol || a.coinId}`).join(', ');
+        console.log(`[SphereClient] ✅ REAL getBalance succeeded (${assets.length} asset(s)).`);
+        return `Your real balance via Sphere SDK: ${summary}.`;
       } catch (e: any) {
-        console.warn('[SphereClient] real getBalance failed');
+        console.warn(`[SphereClient] ⚠️  REAL getBalance failed, falling back to safe placeholder: ${e?.message || e}`);
       }
+    } else if (this.forceRealSdk) {
+      console.warn('[SphereClient] FORCE_REAL_SDK is enabled but payments.getAssets is unavailable (SDK not connected) — using fallback.');
     }
+    console.log('[SphereClient] Using fallback (MOCK) response for getBalance.');
     return `Your ${asset || 'main balance'} looks healthy right now. (MOCK)`;
   }
 
   /**
    * Send tokens using real SDK if active.
+   * Uses PaymentsModule.send({ coinId, amount, recipient }) (@unicitylabs/sphere-sdk),
+   * which returns a TransferResult { id, status, ... }.
+   *
+   * Note: `token` is passed through as `coinId`. If your deployment's token
+   * symbols (e.g. "SOL", "UCT") don't map 1:1 to Sphere coinIds, add a mapping
+   * here before calling payments.send.
    */
   async sendTokens(to: string, amount: string, token: string = 'tokens') {
     await this.initializeIfNeeded();
-    if (this.sphere) {
+    if (this.sphere?.payments?.send) {
       try {
-        // Real: await this.sphere.payments.send({ recipient: to, amount, coinId: ... });
-        console.log(`[SphereClient] REAL sendTokens: ${amount} ${token} to ${to}`);
-        return `Real send of ${amount} ${token} to ${to} executed (via Sphere SDK).`;
+        console.log(`[SphereClient] Attempting REAL sendTokens via Sphere SDK: ${amount} ${token} -> ${to}...`);
+        const result = await this.sphere.payments.send({
+          coinId: token,
+          amount,
+          recipient: to,
+        });
+        console.log(`[SphereClient] ✅ REAL sendTokens succeeded (id=${result?.id}, status=${result?.status}).`);
+        return `Sent ${amount} ${token} to ${to} via Sphere SDK (status: ${result?.status || 'submitted'}).`;
       } catch (e: any) {
-        console.warn('[SphereClient] real sendTokens failed');
+        console.warn(`[SphereClient] ⚠️  REAL sendTokens failed, falling back to safe placeholder: ${e?.message || e}`);
       }
+    } else if (this.forceRealSdk) {
+      console.warn('[SphereClient] FORCE_REAL_SDK is enabled but payments.send is unavailable (SDK not connected) — using fallback.');
     }
+    console.log('[SphereClient] Using fallback (MOCK) response for sendTokens.');
     return `I've prepared to send ${amount} ${token} to ${to}. (MOCK)`;
   }
 
