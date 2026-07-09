@@ -13,7 +13,7 @@
  * - Graceful fallback to mock data if real calls fail (e.g. no mnemonic, network, or ws)
  */
 
-import { Sphere } from '@unicitylabs/sphere-sdk';
+import { Sphere, formatAmount, parseTokenAmount, normalizeCoinId, getTokenDecimals } from '@unicitylabs/sphere-sdk';
 // Node providers for CLI / server use (ROOGLE test & adapters)
 import { createNodeProviders } from '@unicitylabs/sphere-sdk/impl/nodejs';
 
@@ -126,14 +126,16 @@ export class SphereClient {
         ...providers,
         network,                 // Must be forwarded explicitly
         autoGenerate: !mnemonic,
+        // These SDK modules are OFF by default — without enabling them here,
+        // search_agents/recommend_best_agent/hand_off_to_agent would silently
+        // stay in mock mode forever, even with a real, connected SDK.
+        market: true,                        // enables real specialist/intent search
+        communications: { cacheMessages: true }, // enables real DM-based handoff
       };
 
       if (mnemonic) {
         initOptions.mnemonic = mnemonic;
       }
-
-      // Example: enable communications for DM-based handoff
-      // initOptions.communications = { cacheMessages: false };
 
       const { sphere } = await Sphere.init(initOptions);
       this.sphere = sphere;
@@ -185,28 +187,24 @@ export class SphereClient {
 
   /**
    * Send a message (DM style) to another agent/identity.
-   * Uses available communications if present, otherwise logs.
+   * Uses CommunicationsModule.sendDM() — the SDK's actual method name
+   * (there is no sendMessage()/send() on this module).
    */
   async sendMessage(recipientId: string, content: string): Promise<void> {
     await this.initializeIfNeeded();
-    if (this.sphere) {
+    if (this.sphere?.communications?.sendDM) {
       try {
-        // The SDK exposes communications for DMs in some configurations.
-        // Use the most generic available path; fall back to log.
-        if (this.sphere.communications?.sendMessage) {
-          await this.sphere.communications.sendMessage(recipientId, content);
-          return;
-        }
-        if (this.sphere.communications?.send) {
-          await this.sphere.communications.send({ to: recipientId, content });
-          return;
-        }
-        // As last resort for demo: use market or nostr transport if exposed (implementation specific)
-        console.log(`[SphereClient] (REAL mode but simulated DM) to ${recipientId}: ${content}`);
+        console.log(`[SphereClient] Attempting REAL sendDM to ${recipientId}...`);
+        await this.sphere.communications.sendDM(recipientId, content);
+        console.log('[SphereClient] ✅ REAL sendDM succeeded.');
         return;
       } catch (e: any) {
-        console.warn('[SphereClient] sendMessage via REAL SDK failed:', e.message);
+        console.warn(`[SphereClient] ⚠️  REAL sendDM failed, falling back to log-only: ${e?.message || e}`);
+        throw e; // let callers (e.g. handoffToAgent) know the real send did NOT happen
       }
+    }
+    if (this.forceRealSdk) {
+      console.warn('[SphereClient] FORCE_REAL_SDK is enabled but communications.sendDM is unavailable (SDK not connected) — using fallback.');
     }
     console.log(`[SphereClient] (MOCK) sendMessage to ${recipientId}: ${content}`);
   }
@@ -288,19 +286,38 @@ export class SphereClient {
   /**
    * Get balance using real SDK if active.
    * Uses PaymentsModule.getAssets() (@unicitylabs/sphere-sdk) which returns
-   * Asset[] with { coinId, symbol, totalAmount, ... }.
+   * Asset[] with { coinId, symbol, totalAmount, decimals, ... }.
+   *
+   * Important: `totalAmount` is in the coin's SMALLEST units (e.g. "2000000"
+   * for 2 tokens with 6 decimals) — it must be converted using each asset's
+   * own `decimals` via formatAmount() before it means anything to a human.
    */
   async getBalance(asset?: string) {
     await this.initializeIfNeeded();
     if (this.sphere?.payments?.getAssets) {
       try {
-        console.log(`[SphereClient] Attempting REAL getBalance via Sphere SDK payments.getAssets()${asset ? ` (coinId=${asset})` : ''}...`);
-        const assets = await this.sphere.payments.getAssets(asset);
+        // Sync local token state with configured storage providers first.
+        // Without this, tokens received from elsewhere since the wallet was
+        // last opened may not show up in getAssets() even though they exist.
+        if (this.sphere.payments.sync) {
+          try {
+            const syncResult = await this.sphere.payments.sync();
+            console.log(`[SphereClient] Token sync complete (added=${syncResult?.added ?? 0}, removed=${syncResult?.removed ?? 0}).`);
+          } catch (syncErr: any) {
+            console.warn(`[SphereClient] ⚠️  Token sync failed (continuing with local data): ${syncErr?.message || syncErr}`);
+          }
+        }
+
+        const coinId = asset ? normalizeCoinId(asset) : undefined;
+        console.log(`[SphereClient] Attempting REAL getBalance via Sphere SDK payments.getAssets()${coinId ? ` (coinId=${coinId})` : ''}...`);
+        const assets = await this.sphere.payments.getAssets(coinId);
         if (!assets || assets.length === 0) {
           console.log('[SphereClient] ✅ REAL getBalance succeeded (no assets found).');
           return `Your ${asset || 'balance'} looks empty right now (no assets found via Sphere SDK).`;
         }
-        const summary = assets.map((a: any) => `${a.totalAmount} ${a.symbol || a.coinId}`).join(', ');
+        const summary = assets
+          .map((a: any) => formatAmount(a.totalAmount, { decimals: a.decimals, symbol: a.symbol || a.coinId }))
+          .join(', ');
         console.log(`[SphereClient] ✅ REAL getBalance succeeded (${assets.length} asset(s)).`);
         return `Your real balance via Sphere SDK: ${summary}.`;
       } catch (e: any) {
@@ -318,18 +335,36 @@ export class SphereClient {
    * Uses PaymentsModule.send({ coinId, amount, recipient }) (@unicitylabs/sphere-sdk),
    * which returns a TransferResult { id, status, ... }.
    *
-   * Note: `token` is passed through as `coinId`. If your deployment's token
-   * symbols (e.g. "SOL", "UCT") don't map 1:1 to Sphere coinIds, add a mapping
-   * here before calling payments.send.
+   * `token` (a human-typed symbol like "SOL"/"UCT") is normalized into the
+   * SDK's actual coinId via normalizeCoinId(), and `amount` (a human-typed
+   * number like "2") is converted into the coin's smallest units via
+   * parseTokenAmount() before being sent — payments.send() expects amount
+   * in smallest units, not whole tokens.
    */
   async sendTokens(to: string, amount: string, token: string = 'tokens') {
     await this.initializeIfNeeded();
     if (this.sphere?.payments?.send) {
       try {
-        console.log(`[SphereClient] Attempting REAL sendTokens via Sphere SDK: ${amount} ${token} -> ${to}...`);
+        const coinId = normalizeCoinId(token);
+
+        // Prefer decimals from a coin the wallet actually holds (most
+        // accurate, no extra network call); fall back to the SDK's
+        // registry lookup for coins not yet in the local wallet.
+        let decimals = getTokenDecimals(coinId);
+        try {
+          const owned = this.sphere.payments.getBalance?.(coinId);
+          if (owned && owned[0] && typeof owned[0].decimals === 'number') {
+            decimals = owned[0].decimals;
+          }
+        } catch {
+          // Non-fatal — keep the registry-based decimals value.
+        }
+
+        const smallestAmount = parseTokenAmount(amount, decimals).toString();
+        console.log(`[SphereClient] Attempting REAL sendTokens via Sphere SDK: ${amount} ${token} (coinId=${coinId}, decimals=${decimals}, smallestUnits=${smallestAmount}) -> ${to}...`);
         const result = await this.sphere.payments.send({
-          coinId: token,
-          amount,
+          coinId,
+          amount: smallestAmount,
           recipient: to,
         });
         console.log(`[SphereClient] ✅ REAL sendTokens succeeded (id=${result?.id}, status=${result?.status}).`);

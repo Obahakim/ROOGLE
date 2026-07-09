@@ -33,10 +33,11 @@ const FALLBACK_SPECIALISTS = [
 ];
 
 function mapToAgentShape(raw: any) {
-  // Normalize whatever the real SDK or mock returns into the shape the orchestrator expects
+  // Normalize whatever the real SDK or mock returns into the shape the orchestrator expects.
+  // Real SDK results (SearchIntentResult) use `agentNametag`, not `posterNametag`/`nametag`.
   return {
     id: raw.id || raw.intentId || raw.targetAgentId || 'unknown',
-    name: raw.name || raw.posterNametag || raw.nametag || raw.id || 'Specialist',
+    name: raw.name || raw.agentNametag || raw.posterNametag || raw.nametag || raw.id || 'Specialist',
     description: raw.description || raw.message || raw.content || 'Sphere specialist agent',
   };
 }

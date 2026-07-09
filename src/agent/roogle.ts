@@ -198,8 +198,26 @@ export async function handleUserMessage(
             const raw = await sphereClient.searchAgents(args.query || '');
             result = { bestAgent: raw[0] || {}, score: 0.91, reason: 'real SDK recommendation' };
           } else if (toolName === 'hand_off_to_agent') {
-            const h = await sphereClient.handoffToAgent(args.targetAgentId || '', args.context || args.query || '');
-            result = { ...h, targetAgentId: args.targetAgentId || h.targetAgentId };
+            let targetId = args.targetAgentId;
+            if (!targetId) {
+              // Common path for the no-LLM simulator (and some shortcut LLM
+              // decisions): it asks for a handoff without picking a specific
+              // specialist first. Search for the best real match rather than
+              // handing off to an empty recipient.
+              try {
+                const candidates = await sphereClient.searchAgents(args.query || userText || '');
+                targetId = candidates?.[0]?.id || candidates?.[0]?.agentNametag || '';
+                if (targetId) {
+                  console.log(`[ROOGLE] hand_off_to_agent had no targetAgentId — resolved "${targetId}" via search.`);
+                } else {
+                  console.warn('[ROOGLE] hand_off_to_agent had no targetAgentId and search returned no candidates.');
+                }
+              } catch (searchErr: any) {
+                console.warn(`[ROOGLE] Search-for-target failed: ${searchErr?.message || searchErr}`);
+              }
+            }
+            const h = await sphereClient.handoffToAgent(targetId || '', args.context || args.query || '');
+            result = { ...h, targetAgentId: targetId || h.targetAgentId };
           } else {
             // other tools use their execute even in real
             result = await tool.execute(args);
