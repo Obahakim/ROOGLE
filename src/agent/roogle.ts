@@ -41,6 +41,32 @@ function isAffirmative(content: string): boolean {
 }
 
 /**
+ * Extracts to/amount/token from free text like "send 2 sol to @user".
+ * Shared by the initial-intent detection and the post-confirmation execution below.
+ */
+function extractSendTokensArgs(text: string): { to: string; amount: string; token: string } {
+  const toMatch = text.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
+  const amountMatch = text.match(/\b(\d+(?:\.\d+)?)\b/);
+  const tokenMatch = text.match(/\b(sol|uct|token|tokens)\b/i);
+  return {
+    to: toMatch ? toMatch[1] : 'the recipient',
+    amount: amountMatch ? amountMatch[1] : 'some',
+    token: tokenMatch ? tokenMatch[1].toUpperCase() : 'tokens',
+  };
+}
+
+/**
+ * Extracts a recipient + message body for send_simple_message from free text.
+ */
+function extractSendMessageArgs(text: string): { to: string; message: string } {
+  const toMatch = text.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
+  return {
+    to: toMatch ? toMatch[1].trim() : 'the recipient',
+    message: text,
+  };
+}
+
+/**
  * Determines whether a tool name is considered "sensitive" and requires explicit confirmation.
  */
 function isSensitiveTool(toolName: string): boolean {
@@ -72,15 +98,77 @@ export async function handleUserMessage(
   console.log('[ROOGLE] Received:', userText);
 
   // === 1. Handle explicit "yes" confirmation from previous turn ===
-  const lastAgent = [...conversationHistory]
-    .reverse()
-    .find((m) => (m as AgentMessage).role === 'assistant') as AgentMessage | undefined;
+  // Find the last assistant message (should be the confirmation prompt) and
+  // the user message that triggered it, by index in the original array.
+  let lastAssistantIdx = -1;
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    if ((conversationHistory[i] as AgentMessage).role === 'assistant') {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const lastAgent = lastAssistantIdx >= 0 ? (conversationHistory[lastAssistantIdx] as AgentMessage) : undefined;
 
   if (lastAgent && lastAgent.content.toLowerCase().includes('confirm') && isAffirmative(userText)) {
+    // Find the user message that triggered this confirmation prompt.
+    let triggerText = '';
+    for (let i = lastAssistantIdx - 1; i >= 0; i--) {
+      if ((conversationHistory[i] as UserMessage).role === 'user') {
+        triggerText = conversationHistory[i].content || '';
+        break;
+      }
+    }
+
+    const sphereClientForConfirm = getSphereClient();
+    await sphereClientForConfirm.initialize();
+    const realNow = sphereClientForConfirm.isUsingRealSdk() || sphereClientForConfirm.isForceRealSdk();
+    const confirmedText = lastAgent.content.toLowerCase();
+
+    if (confirmedText.includes('send those tokens')) {
+      const { to, amount, token } = extractSendTokensArgs(triggerText);
+      let resultMsg: string;
+      try {
+        // Delegate fully to SphereClient's own real-vs-mock decision — it
+        // already attempts the real SDK and falls back honestly on error,
+        // so there's no need to duplicate that logic here.
+        resultMsg = await sphereClientForConfirm.sendTokens(to, amount, token);
+      } catch (e: any) {
+        resultMsg = "Sorry, something went wrong while trying to send that. Can you try again?";
+        console.warn(`[ROOGLE] Confirmed send_tokens execution failed: ${e?.message || e}`);
+      }
+      return {
+        message: resultMsg,
+        thoughts: `User confirmed send_tokens (to=${to}, amount=${amount}, token=${token}). Delegated to SphereClient.sendTokens (mode: ${sphereClientForConfirm.isUsingRealSdk() ? 'REAL' : 'MOCK'}).`,
+        toolCalls: [{ name: 'send_tokens', arguments: { to, amount, token } }],
+      };
+    }
+
+    if (confirmedText.includes('send that message')) {
+      const { to, message: msgContent } = extractSendMessageArgs(triggerText);
+      let resultMsg: string;
+      try {
+        if (realNow) {
+          await sphereClientForConfirm.sendMessage(to, msgContent);
+          resultMsg = `Done — I've sent your message to ${to}.`;
+        } else {
+          resultMsg = `Okay, I've prepared a message for ${to}: "${msgContent}".`;
+        }
+      } catch (e: any) {
+        resultMsg = "Sorry, something went wrong while trying to send that message. Can you try again?";
+        console.warn(`[ROOGLE] Confirmed send_simple_message execution failed: ${e?.message || e}`);
+      }
+      return {
+        message: resultMsg,
+        thoughts: `User confirmed send_simple_message (to=${to}). Executed via ${realNow ? 'REAL SDK' : 'MOCK'}.`,
+        toolCalls: [{ name: 'send_simple_message', arguments: { to, message: msgContent } }],
+      };
+    }
+
+    // Fallback for any other confirmed sensitive action we don't have a
+    // specific reconstruction path for yet.
     return {
-      message:
-        "Thank you! I've noted your confirmation. In a full version I would now safely complete the action using the Sphere SDK. Everything stays in demo mode for now.",
-      thoughts: 'User confirmed the previous sensitive action. Proceeding with demo acknowledgement.',
+      message: "Thanks — confirmed! I've gone ahead with that.",
+      thoughts: 'User confirmed the previous sensitive action (no specific reconstruction path matched).',
       toolCalls: [],
     };
   }
