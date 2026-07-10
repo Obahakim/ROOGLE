@@ -16,6 +16,7 @@
 
 import type { Tool } from '../../interfaces/message';
 import type { UserMessage, AgentMessage } from '../../interfaces/message';
+import { extractSendTokensArgs, extractSendMessageArgs } from '../extraction';
 
 export interface LLMOptions {
   temperature?: number;
@@ -263,21 +264,17 @@ function simulateToolCalling(
     // Detect value transfer vs text message
     const hasAmount = /\b\d+(?:\.\d+)?\b/.test(lower);
     const hasToken = /\b(sol|uct|token|tokens)\b/i.test(lower);
-    const toMatch = latestUserMsg.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
-    const to = toMatch ? toMatch[1].trim() : 'the recipient';
-    const amountMatch = latestUserMsg.match(/\b(\d+(?:\.\d+)?)\b/);
-    const amount = amountMatch ? amountMatch[1] : 'some';
-    const tokenMatch = latestUserMsg.match(/\b(sol|uct|token|tokens)\b/i);
-    const token = tokenMatch ? tokenMatch[1].toUpperCase() : 'tokens';
 
     if (hasAmount || hasToken) {
       // This is sending tokens/value, not a text message
+      const { to, amount, token } = extractSendTokensArgs(latestUserMsg);
       chosenToolName = 'send_tokens';
       args = { to, amount, token };
       thoughts += 'Detected request to send tokens/value (amount/token/recipient). Using send_tokens tool (not send_simple_message). Will confirm before action.';
     } else {
+      const { to, message } = extractSendMessageArgs(latestUserMsg);
       chosenToolName = 'send_simple_message';
-      args = { to, message: latestUserMsg };
+      args = { to, message };
       thoughts += 'This appears to be a request to prepare a message for someone. I will use send_simple_message to prepare it safely. I will make sure confirmation happens for any value-related action.';
     }
   } 

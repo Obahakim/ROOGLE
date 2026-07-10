@@ -23,6 +23,12 @@ import type {
 import { getAllTools, getToolByName } from './tools';
 import { callLLMWithTools } from './llm';
 import { getSphereClient } from '../sphere/client';
+import {
+  extractSendTokensArgs,
+  extractSendMessageArgs,
+  describeMissingSendTokensFields,
+  describeMissingSendMessageFields,
+} from './extraction';
 
 /**
  * Detects affirmative answers for confirmation flow.
@@ -38,32 +44,6 @@ function isAffirmative(content: string): boolean {
     lower.includes('confirm') ||
     (lower.includes('okay') && lower.length < 10)
   );
-}
-
-/**
- * Extracts to/amount/token from free text like "send 2 sol to @user".
- * Shared by the initial-intent detection and the post-confirmation execution below.
- */
-function extractSendTokensArgs(text: string): { to: string; amount: string; token: string } {
-  const toMatch = text.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
-  const amountMatch = text.match(/\b(\d+(?:\.\d+)?)\b/);
-  const tokenMatch = text.match(/\b(sol|uct|token|tokens)\b/i);
-  return {
-    to: toMatch ? toMatch[1] : 'the recipient',
-    amount: amountMatch ? amountMatch[1] : 'some',
-    token: tokenMatch ? tokenMatch[1].toUpperCase() : 'tokens',
-  };
-}
-
-/**
- * Extracts a recipient + message body for send_simple_message from free text.
- */
-function extractSendMessageArgs(text: string): { to: string; message: string } {
-  const toMatch = text.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
-  return {
-    to: toMatch ? toMatch[1].trim() : 'the recipient',
-    message: text,
-  };
 }
 
 /**
@@ -126,12 +106,21 @@ export async function handleUserMessage(
 
     if (confirmedText.includes('send those tokens')) {
       const { to, amount, token } = extractSendTokensArgs(triggerText);
+      const missing = describeMissingSendTokensFields({ to, amount });
+      if (missing) {
+        // Don't attempt a doomed real-SDK call with placeholder data — ask instead.
+        return {
+          message: missing,
+          thoughts: `User confirmed, but the original request (${JSON.stringify(triggerText)}) is missing required data (to=${to}, amount=${amount}). Asking for clarification instead of executing.`,
+          toolCalls: [],
+        };
+      }
       let resultMsg: string;
       try {
         // Delegate fully to SphereClient's own real-vs-mock decision — it
         // already attempts the real SDK and falls back honestly on error,
         // so there's no need to duplicate that logic here.
-        resultMsg = await sphereClientForConfirm.sendTokens(to, amount, token);
+        resultMsg = await sphereClientForConfirm.sendTokens(to!, amount!, token || 'tokens');
       } catch (e: any) {
         resultMsg = "Sorry, something went wrong while trying to send that. Can you try again?";
         console.warn(`[ROOGLE] Confirmed send_tokens execution failed: ${e?.message || e}`);
@@ -145,10 +134,18 @@ export async function handleUserMessage(
 
     if (confirmedText.includes('send that message')) {
       const { to, message: msgContent } = extractSendMessageArgs(triggerText);
+      const missing = describeMissingSendMessageFields({ to });
+      if (missing) {
+        return {
+          message: missing,
+          thoughts: `User confirmed, but the original request (${JSON.stringify(triggerText)}) is missing a recipient. Asking for clarification instead of executing.`,
+          toolCalls: [],
+        };
+      }
       let resultMsg: string;
       try {
         if (realNow) {
-          await sphereClientForConfirm.sendMessage(to, msgContent);
+          await sphereClientForConfirm.sendMessage(to!, msgContent);
           resultMsg = `Done — I've sent your message to ${to}.`;
         } else {
           resultMsg = `Okay, I've prepared a message for ${to}: "${msgContent}".`;
@@ -196,12 +193,7 @@ export async function handleUserMessage(
     const hasWrongSendCall = executedToolCalls.some(c => c.name === 'send_simple_message');
     if (!hasSendTokensCall) {
       // Override or inject send_tokens call
-      const toMatch = userText.match(/(?:to|@)\s*([A-Za-z0-9@._-]+)/i);
-      const amountMatch = userText.match(/\b(\d+(?:\.\d+)?)\b/);
-      const tokenMatch = userText.match(/\b(sol|uct|token|tokens)\b/i);
-      const to = toMatch ? toMatch[1] : 'the recipient';
-      const amount = amountMatch ? amountMatch[1] : 'some';
-      const token = tokenMatch ? tokenMatch[1].toUpperCase() : 'tokens';
+      const { to, amount, token } = extractSendTokensArgs(userText);
 
       executedToolCalls = [{ name: 'send_tokens', arguments: { to, amount, token } }];
       thoughts = (thoughts || '') + ` [Intent] Detected send tokens/value request. Overrode to send_tokens tool.`;
@@ -244,6 +236,21 @@ export async function handleUserMessage(
 
     // Safety: intercept sensitive actions for explicit confirmation (Self Tools)
     if (isSensitiveTool(toolName)) {
+      // Detect missing/incomplete required data BEFORE ever asking the user
+      // to confirm — confirming an action we can't actually complete just
+      // leads to a dead end (or, worse, execution with wrong placeholder data).
+      const missing = toolName === 'send_tokens'
+        ? describeMissingSendTokensFields({ to: args.to ?? null, amount: args.amount ?? null })
+        : describeMissingSendMessageFields({ to: args.to ?? null });
+
+      if (missing) {
+        return {
+          message: missing,
+          thoughts: (thoughts || '') + ` [Validation] ${toolName} request is missing required data (args=${JSON.stringify(args)}). Asking for clarification instead of confirming.`,
+          toolCalls: [],
+        };
+      }
+
       const confirmTool = getToolByName('confirm_action');
       if (confirmTool) {
         const actionDesc = toolName === 'send_tokens' ? 'send those tokens' : 'send that message';
@@ -287,6 +294,7 @@ export async function handleUserMessage(
             result = { bestAgent: raw[0] || {}, score: 0.91, reason: 'real SDK recommendation' };
           } else if (toolName === 'hand_off_to_agent') {
             let targetId = args.targetAgentId;
+            let targetLabel: string | undefined;
             if (!targetId) {
               // Common path for the no-LLM simulator (and some shortcut LLM
               // decisions): it asks for a handoff without picking a specific
@@ -294,18 +302,36 @@ export async function handleUserMessage(
               // handing off to an empty recipient.
               try {
                 const candidates = await sphereClient.searchAgents(args.query || userText || '');
-                targetId = candidates?.[0]?.id || candidates?.[0]?.agentNametag || '';
+                const top = candidates?.[0];
+                // `id` is an internal intent UUID and is NEVER a valid
+                // transport address — only agentNametag (as "@nametag") or
+                // agentPublicKey (a hex pubkey) actually work, per the SDK's
+                // own "Cannot resolve ... to a transport address" error.
+                if (top?.agentNametag) {
+                  targetId = `@${top.agentNametag}`;
+                  targetLabel = top.agentNametag;
+                } else if (top?.agentPublicKey) {
+                  targetId = top.agentPublicKey;
+                  targetLabel = top.agentPublicKey;
+                }
                 if (targetId) {
                   console.log(`[ROOGLE] hand_off_to_agent had no targetAgentId — resolved "${targetId}" via search.`);
                 } else {
-                  console.warn('[ROOGLE] hand_off_to_agent had no targetAgentId and search returned no candidates.');
+                  console.warn('[ROOGLE] hand_off_to_agent had no targetAgentId and search returned no addressable candidates.');
                 }
               } catch (searchErr: any) {
                 console.warn(`[ROOGLE] Search-for-target failed: ${searchErr?.message || searchErr}`);
               }
             }
-            const h = await sphereClient.handoffToAgent(targetId || '', args.context || args.query || '');
-            result = { ...h, targetAgentId: targetId || h.targetAgentId };
+
+            if (!targetId) {
+              // Nothing addressable was found — be honest instead of
+              // claiming a handoff that can't actually happen.
+              result = { success: false, targetAgentId: null };
+            } else {
+              const h = await sphereClient.handoffToAgent(targetId, args.context || args.query || '');
+              result = { ...h, targetAgentId: targetId, targetAgentName: targetLabel };
+            }
           } else {
             // other tools use their execute even in real
             result = await tool.execute(args);
@@ -320,6 +346,15 @@ export async function handleUserMessage(
         // === Special handling for Discovery Tools / handoff ===
         if (toolName === 'hand_off_to_agent' || (result && result.targetAgentId)) {
           const handoffData = result || {};
+          if (toolName === 'hand_off_to_agent' && (!handoffData.targetAgentId || handoffData.success === false)) {
+            // Be honest: we couldn't actually find/resolve a specialist to
+            // hand off to — don't claim a connection that didn't happen.
+            return {
+              message: "I couldn't find a specific specialist for that yet — could you tell me a bit more about what you're looking for (e.g. \"yield farming\", \"NFT trading\", \"privacy tools\")?",
+              thoughts: `${thoughts || ''} [Handoff] No addressable target found (mode: ${isRealSdk ? 'REAL' : 'MOCK'}).`,
+              toolCalls: executedToolCalls,
+            };
+          }
           const cleanMessage = "I've found a specialist who can help you with that. I'll connect you now.";
           return {
             message: cleanMessage,
