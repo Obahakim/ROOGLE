@@ -39,9 +39,12 @@ async function getMarketSphere() {
         network: __SPHERE_NETWORK__ as any,
         market: true,
       });
-      // Ephemeral, throwaway identity — read-only discovery, never a
-      // persistent or funded wallet.
-      const { sphere } = await Sphere.init({ ...providers, autoGenerate: true });
+      
+      const { sphere } = await Sphere.init({
+        ...providers,
+        network: __SPHERE_NETWORK__ as any,
+        autoGenerate: true,
+      });
       sphereInstance = sphere;
       return sphere;
     })();
