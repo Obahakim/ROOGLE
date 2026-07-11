@@ -1,17 +1,18 @@
 /**
  * config/index.ts
- * 
+ *
  * Loads environment configuration and provides safe defaults.
- * 
  * All code should import from here instead of process.env directly.
- * 
- * Default values must follow the ROOGLE vision:
- * - Always confirm before any money movement
- * - Keep explanations simple and jargon-free
+ *
+ * There is no server-side wallet and no LLM in this architecture — every
+ * balance/send/swap action happens in the browser, against the user's own
+ * wallet, via Sphere Connect. This file is intentionally small.
  */
 
 export const config = {
-  confirmBeforeValue: process.env.CONFIRM_BEFORE_VALUE_MOVEMENT !== 'false',
-  maxToolSteps: parseInt(process.env.MAX_TOOL_STEPS || '5'),
-  discoveryEnabled: process.env.DISCOVERY_ENABLED !== 'false',
+  port: parseInt(process.env.PORT || '3001', 10),
+  // Network the client-side Sphere instances (wallet connect + market
+  // discovery) should target. Must match whatever network the user's
+  // wallet is actually on.
+  sphereNetwork: (process.env.SPHERE_NETWORK as 'testnet' | 'mainnet' | 'devnet') || 'testnet',
 };

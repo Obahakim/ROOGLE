@@ -1,76 +1,54 @@
-# ROOGLE Architecture
+# Architecture
 
-This document describes the high-level architecture of ROOGLE, the conversational orchestrator for Unicity Sphere.
+## Summary
 
-## Mermaid Diagram
+ROOGLE is a static client app (`client/`) plus a minimal server
+(`adapters/iframe/web-entry.ts`). There is no LLM and no server-side
+wallet anywhere in this system.
 
-```mermaid
-flowchart TD
-    User[User<br/>speaks in plain English<br/>any language] -->|Message| Adapter
+## Server
 
-    subgraph "Adapters"
-        direction LR
-        Adapter["Adapter Layer<br/>iframe inside Sphere<br/>or DM bot"]
-    end
+`adapters/iframe/web-entry.ts` — plain Node `http`, no framework.
 
-    Adapter -->|Normalized message| Core["ROOGLE Core<br/>roogle.ts + system prompt"]
+- Serves `public/` (the built client app) as static files.
+- `POST /api/parse` — takes `{ text: string }`, returns
+  `{ intent: 'send' | 'swap' | 'unknown', args, missing }` using pure
+  regex parsing (`src/lib/extraction.ts`). No network call, no SDK, no LLM.
+- `GET /health` — for platform health checks.
 
-    Core --> LLM["LLM Layer<br/>(future: src/agent/llm)"]
+That's the entire server-side surface.
 
-    LLM --> Decide{"What should ROOGLE do?"}
+## Client
 
-    Decide -->|Can handle directly| SelfTools["Self Tools<br/>src/agent/tools/self/"]
-    Decide -->|Needs specialist| DiscoveryTools["Discovery Tools<br/>src/agent/tools/discovery/"]
+Everything that touches a wallet or real value lives in `client/src/`:
 
-    SelfTools --> ExecuteSelf["Execute Self Tools<br/>get_help, get_balance,<br/>send_simple_message, confirm_action"]
+- `wallet.ts` — Sphere Connect wrapper. `autoConnect()` detects the best
+  transport (iframe > extension > popup) and connects to the user's own
+  wallet. Balance reads (`sphere_getBalance`), sends, and DMs all go
+  through `client.query(...)` / `client.intent(...)` against that
+  connection — ROOGLE's server never sees a mnemonic or private key.
+- `market.ts` — a separate, ephemeral, auto-generated Sphere instance
+  (browser SDK, `market: true`) used only to read the public market
+  (search, recent listings). The Connect protocol has no search RPC by
+  design, so this can't go through the user's wallet connection — but it
+  also never needs to, since it never touches funds or signs anything.
+- `format.ts` — amount conversion, using the SDK's own `formatAmount` /
+  `parseTokenAmount` / `toHumanReadable` (verified against the actual
+  installed SDK version, not just its type declarations, which mismatched
+  the runtime in one case — `toSmallestUnit` doesn't exist at runtime;
+  `parseTokenAmount` is the real function).
+- `app.ts` — bento rendering, the send flow, and the swap flow (search →
+  DM negotiate → poll for reply → pay on accept).
+- `identicon.ts` — a small deterministic SVG fingerprint from a pubkey,
+  the same convention as Metamask/ENS "blockies".
 
-    DiscoveryTools --> SphereDiscovery["Sphere SDK Discovery<br/>search agents in marketplace"]
+Bundled by `esbuild.config.mjs` (plain esbuild, not a framework) into
+`public/app.js` + copied `index.html`/`style.css`.
 
-    SphereDiscovery --> Recommend["Recommend best specialist"]
-    Recommend --> PrepareHandoff["Prepare clean context + handoff"]
+## Why no server-side wallet
 
-    ExecuteSelf --> ConfirmationGate
-    PrepareHandoff --> ConfirmationGate
-
-    ConfirmationGate{"Involves moving value<br/>or important action?"} -->|Yes| Confirm["Ask for clear confirmation<br/>Explain simply in plain English"]
-    ConfirmationGate -->|No| FinalResponse["Send friendly response<br/>to the user"]
-
-    Confirm -->|User says yes| ExecuteOrHandoff["Execute self tool<br/>or complete handoff"]
-    Confirm -->|User says no| FinalResponse
-
-    ExecuteOrHandoff --> FinalResponse
-
-    subgraph "Sphere SDK Layer (src/sphere/client.ts)"
-        direction TB
-        Identity["Agent Identity + Wallet"]
-        Messaging["Messaging<br/>DMs & Groups"]
-        Discovery["Agent Discovery & Marketplace"]
-        Identity & Messaging & Discovery
-    end
-
-    Core -.-> Sphere["SphereClient"]
-    SphereDiscovery -.-> Sphere
-    Sphere -.-> Identity
-    Sphere -.-> Messaging
-    Sphere -.-> Discovery
-
-    style User fill:#e0f2fe
-    style Core fill:#fef3c7
-    style ConfirmationGate fill:#fee2e2
-```
-
-## Key Components & Data Flow
-
-- **User** speaks naturally in plain English. No commands or special syntax required.
-
-- **Adapters** (iframe or DM) receive the message from the Sphere environment and pass a normalized message into the core agent. The core logic stays the same regardless of how the user is talking to ROOGLE.
-
-- **ROOGLE Core** (`roogle.ts`) + the permanent **System Prompt** is the decision-making brain. It decides between:
-  - Self Tools (get_help, get_balance, send_simple_message, confirm_action — handle directly and safely)
-  - Discovery Tools (later phases — find and route to a specialist)
-
-- **Sphere SDK Layer** (`sphere/client.ts`) gives ROOGLE its identity, wallet, messaging capabilities, and access to the agent marketplace for discovery.
-
-- **Safety Gate (Confirmation)**: Before any action that moves value or makes important changes, ROOGLE must explain in plain language what will happen and get explicit user approval.
-
-This architecture keeps ROOGLE simple for users while allowing it to intelligently orchestrate the full power of the Unicity Sphere ecosystem.
+Earlier versions of this project ran a single, server-side, mnemonic-based
+wallet (`SPHERE_MNEMONIC`) shared by every visitor. That's fine for a
+single-operator demo, but wrong for a public product — nobody should be
+transacting through a wallet they don't control. This architecture moves
+every value-touching action to the user's own connected wallet instead.

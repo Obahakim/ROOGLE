@@ -1,27 +1,24 @@
 {
   "name": "roogle",
-  "version": "0.1.0",
-  "description": "ROOGLE — Plain-English conversational orchestrator for Unicity Sphere",
-  "main": "dist/src/index.js",
-  "type": "module",
+  "version": "0.2.0",
+  "description": "ROOGLE — a Unicity Sphere wallet dashboard. Connect your wallet, see real holdings, send and swap tokens.",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc",
-    "start": "tsx adapters/iframe/web-entry.ts",
+    "dev": "tsx watch adapters/iframe/web-entry.ts",
+    "build:client": "node esbuild.config.mjs",
+    "build:server": "tsc",
+    "build": "npm run build:client && npm run build:server",
+    "start": "node dist/adapters/iframe/web-entry.js",
     "test": "vitest",
-    "lint": "eslint .",
-    "start:iframe": "tsx adapters/iframe/web-entry.ts",
-    "dev:iframe": "tsx adapters/iframe/web-entry.ts",
-    "start:dm": "tsx adapters/dm/bot-entry.ts"
+    "lint": "eslint ."
   },
   "dependencies": {
-    "@unicitylabs/sphere-sdk": "^0.10.0",
     "dotenv": "^17.4.2",
-    "ws": "^8.18.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@unicitylabs/sphere-sdk": "^0.10.0",
+    "esbuild": "^0.24.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"

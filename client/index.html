@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <title>ROOGLE — Unicity Sphere Wallet</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <div class="brand">
+        <h1>ROOGLE</h1>
+        <span class="tagline">Unicity Sphere wallet</span>
+      </div>
+      <div id="wallet-status"></div>
+    </header>
+
+    <section class="prompt-bar">
+      <form id="prompt-form" autocomplete="off">
+        <input id="prompt-input" type="text" placeholder='Try "send 10 UCT to @hexz" or "swap 3 SOL to BTC"' />
+        <button type="submit" class="btn-primary">Go</button>
+      </form>
+      <div class="prompt-feedback" id="prompt-feedback"></div>
+    </section>
+
+    <main class="bento">
+      <section class="card card-balance">
+        <div class="card-head">
+          <h2>Balance</h2>
+          <button class="btn-ghost" id="btn-refresh-balance">Refresh</button>
+        </div>
+        <div id="card-balance-body"></div>
+      </section>
+
+      <section class="card card-action">
+        <div>
+          <div class="card-head"><h2>Send</h2></div>
+          <p>Send tokens from your connected wallet to any address or nametag.</p>
+        </div>
+        <button class="btn-primary" id="btn-open-send">Send tokens</button>
+      </section>
+
+      <section class="card card-action">
+        <div>
+          <div class="card-head"><h2>Swap</h2></div>
+          <p>Find someone on the market offering the token you want, and negotiate a trade.</p>
+        </div>
+        <button class="btn-primary" id="btn-open-swap">Swap tokens</button>
+      </section>
+
+      <section class="card card-activity">
+        <div class="card-head">
+          <h2>Recent market activity</h2>
+          <button class="btn-ghost" id="btn-refresh-activity">Refresh</button>
+        </div>
+        <div id="card-activity-body"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal-root"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,453 @@
+/**
+ * client/src/style.css
+ *
+ * Theme tokens + layout. Background (#0a0a0a) is the confirmed value from
+ * sphere.unicity.network's own theme-color meta tag. The accent color is
+ * a considered choice (not confirmed against the live brand, since it's a
+ * JS-rendered app I couldn't fully inspect) — swap --accent below if you
+ * want an exact brand match.
+ */
+
+:root {
+  --bg: #0a0a0a;
+  --surface: #131316;
+  --surface-2: #1c1c20;
+  --border: #2a2a30;
+  --text: #f2f2f0;
+  --text-dim: #8b8b93;
+  --accent: #4fd1c5;
+  --accent-dim: #2c7a72;
+  --accent-ink: #04211e;
+  --danger: #f2555a;
+  --success: #5fd97a;
+  --radius: 14px;
+  --radius-sm: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3 {
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+  margin: 0;
+}
+
+.mono,
+.wallet-label,
+.asset-amount,
+.preview-row strong {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: var(--accent);
+}
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+}
+
+/* Header */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.brand h1 {
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+
+.brand .tagline {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.wallet-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px 6px 6px;
+}
+
+.identicon svg {
+  display: block;
+}
+
+.wallet-label {
+  font-size: 14px;
+}
+
+/* Buttons */
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: opacity 0.15s ease;
+}
+
+.btn-primary:hover {
+  opacity: 0.88;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.success-text {
+  color: var(--success);
+}
+
+/* Prompt bar */
+
+.prompt-bar {
+  margin-bottom: 28px;
+}
+
+#prompt-form {
+  display: flex;
+  gap: 10px;
+}
+
+#prompt-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 12px 16px;
+  font-size: 14px;
+}
+
+#prompt-input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+#prompt-input::placeholder {
+  color: var(--text-dim);
+}
+
+.prompt-feedback {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  min-height: 18px;
+}
+
+/* Bento grid */
+
+.bento {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.card-balance {
+  grid-column: span 2;
+}
+
+.card-activity {
+  grid-column: span 4;
+}
+
+.card-action {
+  grid-column: span 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 140px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.card-head h2 {
+  font-size: 15px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.card-action p {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+.empty-state {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0;
+}
+
+.hint-text {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+/* Asset / listing lists */
+
+.asset-list,
+.listing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.asset-row,
+.listing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+.listing-row.listing-selectable {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.listing-row.listing-selectable:hover {
+  background: var(--border);
+}
+
+.listing-desc {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}
+
+.listing-meta,
+.asset-amount {
+  color: var(--text-dim);
+}
+
+.asset-symbol {
+  font-weight: 600;
+}
+
+/* Modal */
+
+#modal-root {
+  display: none;
+}
+
+#modal-root.open {
+  display: block;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  font-size: 16px;
+}
+
+.modal-header button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stack label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.stack input,
+.stack select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.stack input:focus,
+.stack select:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+.form-error {
+  color: var(--danger);
+  font-size: 13px;
+  min-height: 16px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.preview-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.preview-row strong {
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .bento {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .card-balance,
+  .card-activity {
+    grid-column: span 2;
+  }
+  .card-action {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .bento {
+    grid-template-columns: 1fr;
+  }
+  .card-balance,
+  .card-activity,
+  .card-action {
+    grid-column: span 1;
+  }
+  #prompt-form {
+    flex-direction: column;
+  }
+}
