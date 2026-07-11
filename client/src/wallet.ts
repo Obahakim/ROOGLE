@@ -9,7 +9,7 @@
  */
 
 import { autoConnect, type AutoConnectResult } from '@unicitylabs/sphere-sdk/connect/browser';
-import { PERMISSION_SCOPES, WALLET_EVENTS, ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
+import { PERMISSION_SCOPES, WALLET_EVENTS, ERROR_CODES, SPHERE_NETWORKS } from '@unicitylabs/sphere-sdk/connect';
 
 export interface WalletIdentity {
   chainPubkey: string;
@@ -89,6 +89,12 @@ export async function connectWallet(): Promise<void> {
         icon: location.origin + '/icon.svg',
       },
       walletUrl: WALLET_URL,
+      // Required by the Connect protocol's own network-id check — omitting
+      // this was the actual cause of the INCOMPATIBLE_NETWORK (4008) error.
+      // The raw SDK still accepts the string 'testnet' as an alias of this
+      // same network (confirmed in source), but Connect validates by this
+      // numeric id specifically.
+      network: SPHERE_NETWORKS.testnet2,
       permissions: REQUESTED_PERMISSIONS,
     });
     connection = result;
