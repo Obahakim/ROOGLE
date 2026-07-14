@@ -25,7 +25,7 @@
 
     <section class="prompt-bar">
       <form id="prompt-form" autocomplete="off">
-        <input id="prompt-input" type="text" placeholder='Try "send 10 UCT to @hexz" or "swap 3 SOL to BTC"' />
+        <input id="prompt-input" type="text" placeholder='Try "send 10 UCT to @hexz"' />
         <button type="submit" class="btn-primary">Go</button>
       </form>
       <div class="prompt-feedback" id="prompt-feedback"></div>
@@ -50,10 +50,26 @@
 
       <section class="card card-action">
         <div>
-          <div class="card-head"><h2>Swap</h2></div>
-          <p>Find someone on the market offering the token you want, and negotiate a trade.</p>
+          <div class="card-head"><h2>Request payment</h2></div>
+          <p>Send a real invoice — amount, token, and what it's for — to anyone.</p>
         </div>
-        <button class="btn-primary" id="btn-open-swap">Swap tokens</button>
+        <button class="btn-primary" id="btn-open-invoice">Request payment</button>
+      </section>
+
+      <section class="card card-invoices">
+        <div class="card-head">
+          <h2>Invoices</h2>
+          <button class="btn-ghost" id="btn-refresh-invoices">Refresh</button>
+        </div>
+        <div id="card-invoices-body"></div>
+      </section>
+
+      <section class="card card-receipts">
+        <div class="card-head">
+          <h2>Receipts</h2>
+          <button class="btn-ghost" id="btn-refresh-receipts">Refresh</button>
+        </div>
+        <div id="card-receipts-body"></div>
       </section>
 
       <section class="card card-activity">
