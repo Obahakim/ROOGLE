@@ -67,6 +67,8 @@ const REQUESTED_PERMISSIONS = [
   PERMISSION_SCOPES.TRANSFER_REQUEST,
   PERMISSION_SCOPES.DM_REQUEST,
   PERMISSION_SCOPES.DM_READ,
+  PERMISSION_SCOPES.INVOICE_READ,
+  PERMISSION_SCOPES.INVOICE_WRITE,
 ];
 
 function describeConnectError(err: any): string {
@@ -182,4 +184,125 @@ export function describeIntentError(err: any): string {
   if (code === ERROR_CODES.TRANSFER_FAILED) return 'The transfer failed on the network. Nothing was deducted twice — you can retry.';
   if (code === ERROR_CODES.INTENT_CANCELLED) return 'Cancelled.';
   return err?.message || 'Something went wrong completing that action.';
+}
+
+// ---------------------------------------------------------------------------
+// Invoices — a real, standardized "request payment with terms" primitive.
+// Confirmed present in Connect: sphere_getInvoices (query), create_invoice /
+// pay_invoice / cancel_invoice (intents). Params for create_invoice are
+// modeled on the raw SDK's CreateInvoiceRequest shape (Connect's own type is
+// untyped Record<string,unknown>, same situation `send` was in — verified
+// working once live). Pay/cancel param shapes are a reasonable inference
+// from the same pattern and need live confirmation.
+// ---------------------------------------------------------------------------
+
+export type InvoiceState = 'OPEN' | 'PARTIAL' | 'COVERED' | 'CLOSED' | 'CANCELLED' | 'EXPIRED';
+
+export interface InvoiceTerms {
+  creator?: string;
+  createdAt: number;
+  dueDate?: number;
+  memo?: string;
+  targets: Array<{
+    address: string;
+    assets: Array<{ coin?: [coinId: string, amount: string] }>;
+  }>;
+}
+
+export interface InvoiceRef {
+  invoiceId: string;
+  terms: InvoiceTerms;
+  isMine?: boolean;
+}
+
+export interface CreateInvoiceParams {
+  targets: Array<{ address: string; assets: Array<{ coin: [coinId: string, amount: string] }> }>;
+  dueDate?: number;
+  memo?: string;
+}
+
+export async function createInvoice(params: CreateInvoiceParams): Promise<{ success: boolean; invoiceId?: string; error?: string }> {
+  const client = requireClient();
+  return client.intent('create_invoice', params as unknown as Record<string, unknown>);
+}
+
+export async function getInvoices(options?: { createdByMe?: boolean; targetingMe?: boolean; state?: InvoiceState | InvoiceState[] }): Promise<InvoiceRef[]> {
+  const client = requireClient();
+  return client.query('sphere_getInvoices', options as Record<string, unknown> | undefined);
+}
+
+export async function payInvoice(invoiceId: string): Promise<{ success: boolean; error?: string }> {
+  const client = requireClient();
+  return client.intent('pay_invoice', { invoiceId });
+}
+
+export async function cancelInvoice(invoiceId: string): Promise<{ success: boolean; error?: string }> {
+  const client = requireClient();
+  return client.intent('cancel_invoice', { invoiceId });
+}
+
+export interface InvoiceReceiptPayload {
+  type: 'invoice_receipt';
+  version: 1;
+  invoiceId: string;
+  targetAddress: string;
+  targetNametag?: string;
+  terminalState: 'CLOSED' | 'CANCELLED';
+  senderContribution: {
+    senderAddress: string;
+    isRefundAddress?: boolean;
+    assets: Array<{ coinId: string; forwardedAmount: string; returnedAmount: string; netAmount: string; requestedAmount: string }>;
+  };
+  memo?: string;
+  issuedAt: number;
+}
+
+export interface IncomingReceipt {
+  dmId: string;
+  senderPubkey: string;
+  senderNametag?: string;
+  receipt: InvoiceReceiptPayload;
+  receivedAt: number;
+}
+
+/**
+ * Receipts have no dedicated query — confirmed no GET_RECEIPTS method
+ * anywhere in Connect. They're delivered as a DM whose content is prefixed
+ * "invoice_receipt:" followed by JSON (confirmed wire format from SDK
+ * source). This scans a peer's messages and parses out any that match.
+ */
+export async function getReceiptsFrom(peer: string): Promise<IncomingReceipt[]> {
+  const messages = await getMessages(peer);
+  const receipts: IncomingReceipt[] = [];
+  for (const m of messages) {
+    if (!m.content?.startsWith('invoice_receipt:')) continue;
+    try {
+      const payload = JSON.parse(m.content.slice('invoice_receipt:'.length)) as InvoiceReceiptPayload;
+      receipts.push({
+        dmId: `${m.senderPubkey}:${m.timestamp}`,
+        senderPubkey: m.senderPubkey,
+        senderNametag: m.senderNametag,
+        receipt: payload,
+        receivedAt: m.timestamp,
+      });
+    } catch {
+      // Not a well-formed receipt — skip it rather than fail the whole scan.
+    }
+  }
+  return receipts;
+}
+
+/**
+ * Scans all known conversations for receipts. GET_CONVERSATIONS gives the
+ * list of peers you've messaged; each is checked for invoice_receipt DMs.
+ */
+export async function getAllReceipts(): Promise<IncomingReceipt[]> {
+  const client = requireClient();
+  const conversations = await client.query<Array<{ peerPubkey: string }>>('sphere_getConversations');
+  const all: IncomingReceipt[] = [];
+  for (const c of conversations || []) {
+    const fromPeer = await getReceiptsFrom(c.peerPubkey).catch(() => []);
+    all.push(...fromPeer);
+  }
+  return all.sort((a, b) => b.receivedAt - a.receivedAt);
 }

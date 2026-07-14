@@ -77,7 +77,7 @@ function handleParse(text: string) {
   return {
     intent: 'unknown' as const,
     args: null,
-    missing: "I can help with sending or swapping tokens. Try something like \"send 10 UCT to @hexz\" or \"swap 3 SOL to BTC\".",
+    missing: "I can help with sending tokens or requesting a payment. Try something like \"send 10 UCT to @hexz\".",
   };
 }
 
