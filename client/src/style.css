@@ -218,11 +218,6 @@ a {
   grid-column: span 4;
 }
 
-.card-invoices,
-.card-receipts {
-  grid-column: span 2;
-}
-
 .card-action {
   grid-column: span 1;
   display: flex;
@@ -435,9 +430,7 @@ a {
     grid-template-columns: repeat(2, 1fr);
   }
   .card-balance,
-  .card-activity,
-  .card-invoices,
-  .card-receipts {
+  .card-activity {
     grid-column: span 2;
   }
   .card-action {
@@ -451,9 +444,7 @@ a {
   }
   .card-balance,
   .card-activity,
-  .card-action,
-  .card-invoices,
-  .card-receipts {
+  .card-action {
     grid-column: span 1;
   }
   #prompt-form {

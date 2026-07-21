@@ -17,13 +17,8 @@ import {
   sendTokens,
   sendDM,
   describeIntentError,
-  createInvoice,
-  getInvoices,
-  payInvoice,
-  cancelInvoice,
-  getAllReceipts,
+  requestPayment,
   type Asset,
-  type IncomingReceipt,
 } from './wallet';
 import { getRecentListings, type MarketIntent } from './market';
 import { formatBalance, toSmallestUnits } from './format';
@@ -36,8 +31,6 @@ import { identiconSvg } from './identicon';
 let balance: Asset[] | null = null;
 let balanceLoading = false;
 let recentListings: MarketIntent[] | null = null;
-let receiptsCache: IncomingReceipt[] | null = null;
-let sentInvoicesCache: any[] | null = null;
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const found = document.getElementById(id);
@@ -225,8 +218,29 @@ function openSendModal(prefill: SendPrefill = {}) {
     openModal('Connect your wallet', `<p class="empty-state">Connect your wallet first — sending needs your wallet's approval.</p>`);
     return;
   }
+  if (balance === null || balanceLoading) {
+    // Balance fetch hasn't resolved yet — show a real state and retry,
+    // instead of a token dropdown with nothing in it.
+    const body = openModal('Loading your balance…', `<p class="empty-state">One moment — fetching your tokens.</p>`);
+    refreshBalance().then(() => {
+      if (document.getElementById('modal-root')?.classList.contains('open')) {
+        closeModal();
+        openSendModal(prefill);
+      }
+    });
+    return;
+  }
+  if (balance.length === 0) {
+    openModal(
+      'No tokens found',
+      `<p class="empty-state">Your connected wallet doesn't show any tokens right now. If you expect a balance, try Refresh on the Balance card first.</p>
+       <div class="modal-actions"><button class="btn-ghost" id="send-empty-close">Close</button></div>`
+    );
+    document.getElementById('send-empty-close')?.addEventListener('click', closeModal);
+    return;
+  }
 
-  const assets = balance || [];
+  const assets = balance;
   const body = openModal(
     'Send tokens',
     `
@@ -326,202 +340,15 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
 }
 
 // ---------------------------------------------------------------------------
-// Invoices — a standardized, cross-wallet "request payment with terms"
-// primitive. Confirmed real (sphere_getInvoices, create_invoice, pay_invoice,
-// cancel_invoice) — unlike the removed swap feature, any Sphere-compatible
-// wallet already knows how to render and handle these natively.
+// Request Payment — confirmed real by the Unicity/Sphere team directly:
+// the wallet's handler set is { send, payment_request, dm, sign_message,
+// mint, receive }. This is one-sided by design (see wallet.ts) — there's
+// no query to list requests you've sent, so success here just means the
+// request was handed to the wallet; whether it gets paid shows up later
+// as a balance change, not a status you can track in ROOGLE.
 // ---------------------------------------------------------------------------
 
-async function refreshInvoices() {
-  const container = el('card-invoices-body');
-  const state = getWalletState();
-  if (state.status !== 'connected') {
-    container.innerHTML = `<p class="empty-state">Connect your wallet to create or pay invoices.</p>`;
-    return;
-  }
-  container.innerHTML = `<p class="empty-state">Loading invoices…</p>`;
-  try {
-    const [toPay, sent] = await Promise.all([
-      getInvoices({ targetingMe: true }).catch(() => []),
-      getInvoices({ createdByMe: true }).catch(() => []),
-    ]);
-    renderInvoicesCard(toPay, sent);
-  } catch (err: any) {
-    container.innerHTML = `<p class="form-error">Couldn't load invoices: ${escapeHtml(err?.message || 'unknown error')}</p>`;
-  }
-}
-
-function invoiceAmountLabel(terms: any): string {
-  const first = terms?.targets?.[0]?.assets?.[0]?.coin;
-  if (!first) return '';
-  const [coinId, amount] = first;
-  return `${amount} ${coinId}`;
-}
-
-function findReceiptForInvoice(invoiceId: string): IncomingReceipt | null {
-  if (!receiptsCache) return null;
-  return receiptsCache.find((r) => r.receipt.invoiceId === invoiceId) || null;
-}
-
-function findInvoiceForReceipt(invoiceId: string): any | null {
-  if (!sentInvoicesCache) return null;
-  return sentInvoicesCache.find((inv) => inv.invoiceId === invoiceId) || null;
-}
-
-function openInvoiceReceiptPair(invoice: any, receipt: IncomingReceipt) {
-  const asset = receipt.receipt.senderContribution.assets[0];
-  const who = receipt.senderNametag ? `@${receipt.senderNametag}` : shortAddr(receipt.senderPubkey);
-  openModal(
-    'Invoice & receipt',
-    `
-    <div class="preview">
-      <div class="preview-row"><span>Invoice for</span><strong>${escapeHtml(invoice.terms?.memo || 'Invoice')}</strong></div>
-      <div class="preview-row"><span>Requested</span><strong>${escapeHtml(invoiceAmountLabel(invoice.terms))}</strong></div>
-      <div class="preview-row"><span>Paid by</span><strong>${escapeHtml(who)}</strong></div>
-      <div class="preview-row"><span>Status</span><strong>${escapeHtml(receipt.receipt.terminalState)}</strong></div>
-      ${asset ? `<div class="preview-row"><span>Settled amount</span><strong>${escapeHtml(asset.netAmount)} ${escapeHtml(asset.coinId)}</strong></div>` : ''}
-    </div>
-    <p class="hint-text">This receipt is a real, cryptographically-issued record of settlement — not something ROOGLE generated or stored separately.</p>
-    <div class="modal-actions"><button class="btn-primary" id="pair-close">Close</button></div>
-  `
-  );
-  document.getElementById('pair-close')?.addEventListener('click', closeModal);
-}
-
-/** Opens a receipt on its own — pairs it with the matching sent invoice if we have one cached. */
-function openReceiptDetail(receipt: IncomingReceipt) {
-  const invoice = findInvoiceForReceipt(receipt.receipt.invoiceId);
-  if (invoice) {
-    openInvoiceReceiptPair(invoice, receipt);
-    return;
-  }
-  const asset = receipt.receipt.senderContribution.assets[0];
-  const who = receipt.senderNametag ? `@${receipt.senderNametag}` : shortAddr(receipt.senderPubkey);
-  openModal(
-    'Receipt',
-    `
-    <div class="preview">
-      <div class="preview-row"><span>From</span><strong>${escapeHtml(who)}</strong></div>
-      <div class="preview-row"><span>Status</span><strong>${escapeHtml(receipt.receipt.terminalState)}</strong></div>
-      ${asset ? `<div class="preview-row"><span>Settled amount</span><strong>${escapeHtml(asset.netAmount)} ${escapeHtml(asset.coinId)}</strong></div>` : ''}
-      ${receipt.receipt.memo ? `<div class="preview-row"><span>Memo</span><strong>${escapeHtml(receipt.receipt.memo)}</strong></div>` : ''}
-    </div>
-    <p class="hint-text">The matching invoice for this receipt isn't in your recent sent list, so only the receipt is shown here.</p>
-    <div class="modal-actions"><button class="btn-primary" id="receipt-close">Close</button></div>
-  `
-  );
-  document.getElementById('receipt-close')?.addEventListener('click', closeModal);
-}
-
-function renderInvoicesCard(toPay: any[], sent: any[]) {
-  const container = el('card-invoices-body');
-  sentInvoicesCache = sent;
-
-  const toPayHtml =
-    toPay.length === 0
-      ? `<p class="empty-state">Nothing to pay right now.</p>`
-      : `<ul class="listing-list">${toPay
-          .map(
-            (inv) => `
-        <li class="listing-row listing-selectable" data-pay-id="${escapeHtml(inv.invoiceId)}">
-          <span class="listing-desc">${escapeHtml(inv.terms?.memo || 'Invoice')} — ${escapeHtml(invoiceAmountLabel(inv.terms))}</span>
-          <span class="listing-meta">Pay</span>
-        </li>`
-          )
-          .join('')}</ul>`;
-
-  const sentHtml =
-    sent.length === 0
-      ? `<p class="empty-state">You haven't sent any invoices yet.</p>`
-      : `<ul class="listing-list">${sent
-          .map((inv) => {
-            const matchingReceipt = findReceiptForInvoice(inv.invoiceId);
-            const statusLabel = matchingReceipt ? 'Paid — view receipt' : 'Cancel';
-            const dataAttr = matchingReceipt ? `data-view-paired-id="${escapeHtml(inv.invoiceId)}"` : `data-cancel-id="${escapeHtml(inv.invoiceId)}"`;
-            return `
-        <li class="listing-row listing-selectable" ${dataAttr}>
-          <span class="listing-desc">${escapeHtml(inv.terms?.memo || 'Invoice')} — ${escapeHtml(invoiceAmountLabel(inv.terms))}</span>
-          <span class="listing-meta">${statusLabel}</span>
-        </li>`;
-          })
-          .join('')}</ul>`;
-
-  container.innerHTML = `
-    <p class="hint-text">To pay</p>
-    ${toPayHtml}
-    <p class="hint-text" style="margin-top:14px">You've sent</p>
-    ${sentHtml}
-  `;
-
-  container.querySelectorAll('[data-pay-id]').forEach((node) => {
-    node.addEventListener('click', () => confirmPayInvoice((node as HTMLElement).dataset.payId!));
-  });
-  container.querySelectorAll('[data-cancel-id]').forEach((node) => {
-    node.addEventListener('click', () => confirmCancelInvoice((node as HTMLElement).dataset.cancelId!));
-  });
-  container.querySelectorAll('[data-view-paired-id]').forEach((node) => {
-    node.addEventListener('click', () => {
-      const invoiceId = (node as HTMLElement).dataset.viewPairedId!;
-      const invoice = sent.find((i) => i.invoiceId === invoiceId);
-      const receipt = findReceiptForInvoice(invoiceId);
-      if (invoice && receipt) openInvoiceReceiptPair(invoice, receipt);
-    });
-  });
-}
-
-function confirmPayInvoice(invoiceId: string) {
-  const body = openModal(
-    'Pay this invoice?',
-    `<p class="empty-state">This will move real value once approved in your wallet.</p>
-     <div class="modal-actions">
-       <button class="btn-ghost" id="inv-pay-cancel">Cancel</button>
-       <button class="btn-primary" id="inv-pay-confirm">Pay</button>
-     </div>`
-  );
-  body.querySelector('#inv-pay-cancel')!.addEventListener('click', closeModal);
-  body.querySelector('#inv-pay-confirm')!.addEventListener('click', async () => {
-    body.innerHTML = `<p class="empty-state">Check your wallet to approve…</p>`;
-    try {
-      const result = await payInvoice(invoiceId);
-      body.innerHTML = result.success
-        ? `<p class="success-text">Paid.</p><div class="modal-actions"><button class="btn-primary" id="inv-pay-done">Done</button></div>`
-        : `<p class="form-error">${escapeHtml(result.error || 'Payment did not complete.')}</p><div class="modal-actions"><button class="btn-ghost" id="inv-pay-done">Close</button></div>`;
-      body.querySelector('#inv-pay-done')!.addEventListener('click', closeModal);
-      refreshInvoices();
-      refreshBalance();
-    } catch (err: any) {
-      body.innerHTML = `<p class="form-error">${escapeHtml(describeIntentError(err))}</p>
-        <div class="modal-actions"><button class="btn-ghost" id="inv-pay-close">Close</button></div>`;
-      body.querySelector('#inv-pay-close')!.addEventListener('click', closeModal);
-    }
-  });
-}
-
-function confirmCancelInvoice(invoiceId: string) {
-  const body = openModal(
-    'Cancel this invoice?',
-    `<p class="empty-state">The person you sent it to won't be able to pay it after this.</p>
-     <div class="modal-actions">
-       <button class="btn-ghost" id="inv-cancel-back">Back</button>
-       <button class="btn-primary" id="inv-cancel-confirm">Cancel invoice</button>
-     </div>`
-  );
-  body.querySelector('#inv-cancel-back')!.addEventListener('click', closeModal);
-  body.querySelector('#inv-cancel-confirm')!.addEventListener('click', async () => {
-    body.innerHTML = `<p class="empty-state">Check your wallet to approve…</p>`;
-    try {
-      await cancelInvoice(invoiceId);
-      closeModal();
-      refreshInvoices();
-    } catch (err: any) {
-      body.innerHTML = `<p class="form-error">${escapeHtml(describeIntentError(err))}</p>
-        <div class="modal-actions"><button class="btn-ghost" id="inv-cancel-close">Close</button></div>`;
-      body.querySelector('#inv-cancel-close')!.addEventListener('click', closeModal);
-    }
-  });
-}
-
-interface InvoicePrefill {
+interface RequestPaymentPrefill {
   to?: string | null;
   amount?: string | null;
   token?: string | null;
@@ -529,17 +356,38 @@ interface InvoicePrefill {
   memo?: string | null;
 }
 
-function openCreateInvoiceModal(prefill: InvoicePrefill = {}) {
+function openRequestPaymentModal(prefill: RequestPaymentPrefill = {}) {
   const state = getWalletState();
   if (state.status !== 'connected') {
-    openModal('Connect your wallet', `<p class="empty-state">Connect your wallet first to create an invoice.</p>`);
+    openModal('Connect your wallet', `<p class="empty-state">Connect your wallet first to request a payment.</p>`);
     return;
   }
-  const assets = balance || [];
+  if (balance === null || balanceLoading) {
+    openModal('Loading your balance…', `<p class="empty-state">One moment — fetching your tokens.</p>`);
+    refreshBalance().then(() => {
+      if (document.getElementById('modal-root')?.classList.contains('open')) {
+        closeModal();
+        openRequestPaymentModal(prefill);
+      }
+    });
+    return;
+  }
+  if (balance.length === 0) {
+    openModal(
+      'No tokens found',
+      `<p class="empty-state">Your connected wallet doesn't show any tokens right now. If you expect a balance, try Refresh on the Balance card first.</p>
+       <div class="modal-actions"><button class="btn-ghost" id="req-empty-close">Close</button></div>`
+    );
+    document.getElementById('req-empty-close')?.addEventListener('click', closeModal);
+    return;
+  }
+  const assets = balance;
+
   const body = openModal(
     'Request payment',
     `
-    <form id="invoice-form" class="stack">
+    <p class="hint-text">This asks someone to pay you — they'll see and approve it in their own wallet. There's no way to track it here once sent; check your Balance to see if it landed.</p>
+    <form id="request-form" class="stack">
       <label>From
         <input name="to" type="text" placeholder="@nametag or address" value="${prefill.to ? escapeHtml(prefill.to) : ''}" required />
       </label>
@@ -562,13 +410,13 @@ function openCreateInvoiceModal(prefill: InvoicePrefill = {}) {
       <label>What's this for? (memo)
         <input name="memo" type="text" placeholder="e.g. Logo design, final payment" value="${prefill.memo ? escapeHtml(prefill.memo) : ''}" />
       </label>
-      <div class="form-error" id="invoice-form-error"></div>
-      <button type="submit" class="btn-primary">Create &amp; send</button>
+      <div class="form-error" id="request-form-error"></div>
+      <button type="submit" class="btn-primary">Preview</button>
     </form>
   `
   );
 
-  body.querySelector('#invoice-form')!.addEventListener('submit', async (e) => {
+  body.querySelector('#request-form')!.addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target as HTMLFormElement;
     const data = new FormData(form);
@@ -576,10 +424,10 @@ function openCreateInvoiceModal(prefill: InvoicePrefill = {}) {
     const amount = String(data.get('amount') || '').trim();
     const coinId = String(data.get('coinId') || '');
     const memo = String(data.get('memo') || '').trim();
-    const errorEl = body.querySelector('#invoice-form-error')!;
+    const errorEl = body.querySelector('#request-form-error')!;
 
     if (!to) {
-      errorEl.textContent = 'Enter who owes this invoice.';
+      errorEl.textContent = 'Enter who you want to request payment from.';
       return;
     }
     if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
@@ -593,15 +441,14 @@ function openCreateInvoiceModal(prefill: InvoicePrefill = {}) {
 
     const asset = assets.find((a) => a.coinId === coinId);
     errorEl.textContent = '';
-    openInvoicePreview({ to, amount, coinId, memo, symbol: asset?.symbol || coinId, decimals: asset?.decimals ?? 0 });
+    openRequestPaymentPreview({ to, amount, coinId, memo, symbol: asset?.symbol || coinId, decimals: asset?.decimals ?? 0 });
   });
 }
 
-async function openInvoicePreview(args: { to: string; amount: string; coinId: string; memo: string; symbol: string; decimals: number }) {
-  const body = openModal('Confirm invoice', `<p class="empty-state">Resolving recipient…</p>`);
+async function openRequestPaymentPreview(args: { to: string; amount: string; coinId: string; memo: string; symbol: string; decimals: number }) {
+  const body = openModal('Confirm request', `<p class="empty-state">Resolving recipient…</p>`);
   const resolved = await resolvePeer(args.to).catch(() => null);
-  const targetAddress = resolved?.directAddress || args.to;
-  const resolvedLabel = resolved?.nametag ? `@${resolved.nametag}` : targetAddress;
+  const resolvedLabel = resolved?.nametag ? `@${resolved.nametag}` : resolved?.directAddress || args.to;
 
   body.innerHTML = `
     <div class="preview">
@@ -610,99 +457,31 @@ async function openInvoicePreview(args: { to: string; amount: string; coinId: st
       <div class="preview-row"><span>For</span><strong>${escapeHtml(args.memo || '(no memo)')}</strong></div>
       ${!resolved ? `<p class="form-error">Could not resolve this recipient yet — double check it before continuing.</p>` : ''}
     </div>
-    <p class="hint-text">This creates a real invoice token and sends it to them. They'll approve payment on their own end — nothing is deducted from you.</p>
     <div class="modal-actions">
-      <button class="btn-ghost" id="inv-preview-back">Back</button>
-      <button class="btn-primary" id="inv-preview-confirm">Confirm &amp; send</button>
+      <button class="btn-ghost" id="req-preview-back">Back</button>
+      <button class="btn-primary" id="req-preview-confirm">Confirm &amp; send</button>
     </div>
   `;
 
-  body.querySelector('#inv-preview-back')!.addEventListener('click', () => openCreateInvoiceModal(args));
-  body.querySelector('#inv-preview-confirm')!.addEventListener('click', async () => {
-    body.innerHTML = `<p class="empty-state">Check your wallet to approve creating this invoice…</p>`;
+  body.querySelector('#req-preview-back')!.addEventListener('click', () => openRequestPaymentModal(args));
+  body.querySelector('#req-preview-confirm')!.addEventListener('click', async () => {
+    body.innerHTML = `<p class="empty-state">Check your wallet to approve sending this request…</p>`;
     try {
       const smallest = toSmallestUnits(args.amount, args.decimals);
-      const result = await createInvoice({
-        targets: [{ address: targetAddress, assets: [{ coin: [args.coinId, smallest] }] }],
-        memo: args.memo || undefined,
-      });
+      const result = await requestPayment({ to: args.to, amount: smallest, coinId: args.coinId, memo: args.memo || undefined });
 
-      if (!result.success) {
-        body.innerHTML = `<p class="form-error">${escapeHtml(result.error || 'Could not create the invoice.')}</p>
-          <div class="modal-actions"><button class="btn-ghost" id="inv-create-close">Close</button></div>`;
-        body.querySelector('#inv-create-close')!.addEventListener('click', closeModal);
-        return;
-      }
-
-      // Let the recipient know directly — best-effort, doesn't block success.
-      try {
-        await sendDM(args.to, `You have a new invoice for ${args.amount} ${args.symbol}${args.memo ? `: ${args.memo}` : ''}. Check your Sphere wallet's invoices to pay it.`);
-      } catch {
-        // Non-fatal — the invoice itself still exists on-chain either way.
-      }
-
-      body.innerHTML = `
-        <div class="preview"><p class="success-text">Invoice sent to ${escapeHtml(args.to)}.</p></div>
-        <div class="modal-actions"><button class="btn-primary" id="inv-create-done">Done</button></div>
-      `;
-      body.querySelector('#inv-create-done')!.addEventListener('click', closeModal);
-      refreshInvoices();
+      body.innerHTML = result.success
+        ? `<div class="preview"><p class="success-text">Request sent to ${escapeHtml(args.to)}.</p></div>
+           <div class="modal-actions"><button class="btn-primary" id="req-done">Done</button></div>`
+        : `<p class="form-error">${escapeHtml(result.error || 'Could not send the request.')}</p>
+           <div class="modal-actions"><button class="btn-ghost" id="req-done">Close</button></div>`;
+      body.querySelector('#req-done')!.addEventListener('click', closeModal);
     } catch (err: any) {
       body.innerHTML = `<p class="form-error">${escapeHtml(describeIntentError(err))}</p>
-        <div class="modal-actions"><button class="btn-ghost" id="inv-create-close">Close</button></div>`;
-      body.querySelector('#inv-create-close')!.addEventListener('click', closeModal);
+        <div class="modal-actions"><button class="btn-ghost" id="req-close">Close</button></div>`;
+      body.querySelector('#req-close')!.addEventListener('click', closeModal);
     }
   });
-}
-
-// ---------------------------------------------------------------------------
-// Receipts — no dedicated query exists; these are parsed out of DMs using
-// the confirmed "invoice_receipt:" wire format (see wallet.ts).
-// ---------------------------------------------------------------------------
-
-async function refreshReceipts() {
-  const container = el('card-receipts-body');
-  const state = getWalletState();
-  if (state.status !== 'connected') {
-    container.innerHTML = `<p class="empty-state">Connect your wallet to see receipts sent to you.</p>`;
-    return;
-  }
-  container.innerHTML = `<p class="empty-state">Loading receipts…</p>`;
-  try {
-    const receipts = await getAllReceipts();
-    receiptsCache = receipts;
-    if (receipts.length === 0) {
-      container.innerHTML = `<p class="empty-state">No receipts yet.</p>`;
-      return;
-    }
-    container.innerHTML = `
-      <ul class="listing-list">
-        ${receipts
-          .slice(0, 10)
-          .map((r, i) => {
-            const asset = r.receipt.senderContribution.assets[0];
-            const label = asset ? `${asset.netAmount} ${asset.coinId}` : '';
-            const who = r.senderNametag ? `@${r.senderNametag}` : shortAddr(r.senderPubkey);
-            return `
-          <li class="listing-row listing-selectable" data-receipt-index="${i}">
-            <span class="listing-desc">${escapeHtml(who)} — ${escapeHtml(r.receipt.terminalState)}${r.receipt.memo ? ` — ${escapeHtml(r.receipt.memo)}` : ''}</span>
-            <span class="listing-meta">${escapeHtml(label)}</span>
-          </li>`;
-          })
-          .join('')}
-      </ul>
-    `;
-    container.querySelectorAll('[data-receipt-index]').forEach((node) => {
-      node.addEventListener('click', () => {
-        const idx = Number((node as HTMLElement).dataset.receiptIndex);
-        openReceiptDetail(receipts[idx]);
-      });
-    });
-    // Re-render invoices now that receipts are available to cross-reference.
-    refreshInvoices();
-  } catch (err: any) {
-    container.innerHTML = `<p class="form-error">Couldn't load receipts: ${escapeHtml(err?.message || 'unknown error')}</p>`;
-  }
 }
 
 async function handlePromptSubmit(text: string) {
@@ -723,7 +502,7 @@ async function handlePromptSubmit(text: string) {
   }
 
   if (parsed.intent === 'swap') {
-    feedback.textContent = "Swap isn't available — there's no guaranteed way to protect both sides of a token-for-token trade here. Try sending tokens directly, or use \"Request payment\" to invoice someone instead.";
+    feedback.textContent = "Swap isn't available — there's no guaranteed way to protect both sides of a token-for-token trade here. Try sending tokens directly, or use \"Request payment\" instead.";
     return;
   }
 
@@ -745,18 +524,14 @@ export function initApp() {
   onWalletChange(() => {
     renderWalletHeader();
     refreshBalance();
-    refreshInvoices();
-    refreshReceipts();
   });
 
   refreshRecentListings();
 
   el('btn-open-send').addEventListener('click', () => openSendModal());
-  el('btn-open-invoice').addEventListener('click', () => openCreateInvoiceModal());
+  el('btn-open-request').addEventListener('click', () => openRequestPaymentModal());
   el('btn-refresh-activity').addEventListener('click', () => refreshRecentListings());
   el('btn-refresh-balance').addEventListener('click', () => refreshBalance());
-  el('btn-refresh-invoices').addEventListener('click', () => refreshInvoices());
-  el('btn-refresh-receipts').addEventListener('click', () => refreshReceipts());
 
   const promptForm = el<HTMLFormElement>('prompt-form');
   promptForm.addEventListener('submit', (e) => {
