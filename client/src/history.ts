@@ -1,5 +1,5 @@
-export type HistoryAction = 'send' | 'request_payment' | 'market_search';
-export type HistoryStatus = 'success' | 'failure';
+export type HistoryAction = 'send' | 'request_payment';
+export type HistoryStatus = 'pending' | 'success' | 'failure';
 
 export interface HistoryRecord {
   id: string;
@@ -20,7 +20,20 @@ export interface HistoryRecord {
 const STORAGE_KEY = 'roogle:history';
 const MAX_RECORDS = 50;
 
-function safeParse(value: string | null): HistoryRecord[] {
+function isTransactionHistoryRecord(value: unknown): value is HistoryRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  const validAction = record.action === 'send' || record.action === 'request_payment';
+  return (
+    validAction &&
+    typeof record.id === 'string' &&
+    typeof record.timestamp === 'number' &&
+    typeof record.title === 'string' &&
+    typeof record.status === 'string'
+  );
+}
+
+function safeParse(value: string | null): unknown[] {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
@@ -32,7 +45,7 @@ function safeParse(value: string | null): HistoryRecord[] {
 
 export function loadHistory(): HistoryRecord[] {
   if (typeof window === 'undefined' || !window.localStorage) return [];
-  return safeParse(window.localStorage.getItem(STORAGE_KEY));
+  return safeParse(window.localStorage.getItem(STORAGE_KEY)).filter(isTransactionHistoryRecord);
 }
 
 export function saveHistory(records: HistoryRecord[]): void {

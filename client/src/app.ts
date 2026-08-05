@@ -17,9 +17,10 @@ import {
   sendTokens,
   describeIntentError,
   requestPayment,
+  getWalletHistory,
   type Asset,
 } from './wallet';
-import { addHistoryRecord, clearHistory, exportHistory, loadHistory, type HistoryRecord } from './history';
+import { addHistoryRecord, clearHistory, exportHistory, loadHistory, saveHistory, type HistoryRecord } from './history';
 import { addressableTarget, searchMarket, type MarketIntent } from './market';
 import { formatBalance, toSmallestUnits } from './format';
 import { identiconSvg } from './identicon';
@@ -146,7 +147,34 @@ function formatTimestamp(value: number): string {
   });
 }
 
-function refreshHistory() {
+async function refreshPendingHistoryStatuses(): Promise<void> {
+  const pendingRecords = historyRecords.filter((record) => record.status === 'pending' && record.resultId);
+  if (pendingRecords.length === 0) return;
+
+  try {
+    const walletHistory = await getWalletHistory();
+    const completedIds = new Set(walletHistory.map((entry) => entry.transferId).filter(Boolean));
+    let updated = false;
+
+    historyRecords = historyRecords.map((record) => {
+      if (record.status === 'pending' && record.resultId && completedIds.has(record.resultId)) {
+        updated = true;
+        return { ...record, status: 'success' };
+      }
+      return record;
+    });
+
+    if (updated) {
+      saveHistory(historyRecords);
+    }
+  } catch {
+    // Ignore refresh failures; keep pending entries until next attempt.
+  }
+}
+
+async function refreshHistory(): Promise<void> {
+  historyRecords = loadHistory();
+  await refreshPendingHistoryStatuses();
   historyRecords = loadHistory();
   renderHistoryCard();
 }
@@ -171,7 +199,10 @@ function renderHistoryCard() {
         <li class="history-row">
           <div>
             <strong>${escapeHtml(record.title)}</strong>
-            <div class="history-meta">${escapeHtml(formatTimestamp(record.timestamp))}</div>
+            <div class="history-meta">
+              ${escapeHtml(formatTimestamp(record.timestamp))}
+              <span class="history-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
+            </div>
           </div>
           <div class="history-details">
             ${record.counterparty ? `<span>${escapeHtml(record.counterparty)}</span>` : ''}
@@ -210,12 +241,6 @@ async function performMarketSearch(query: string) {
     marketResults = [];
     console.warn('Could not search market:', err?.message || err);
   }
-  addHistoryRecord({
-    action: 'market_search',
-    status: 'success',
-    title: `Market search: ${query}`,
-    details: `Searched for quotes matching: ${query}`,
-  });
   renderMarketCard();
 }
 
@@ -458,9 +483,9 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
     try {
       const smallest = toSmallestUnits(args.amount, args.decimals);
       const result = await sendTokens({ to: args.to, amount: smallest, coinId: args.coinId });
-      const record = addHistoryRecord({
+      addHistoryRecord({
         action: 'send',
-        status: 'success',
+        status: 'pending',
         title: `Sent ${args.amount} ${args.symbol}`,
         counterparty: resolvedLabel,
         amount: args.amount,
@@ -469,7 +494,7 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
         resultId: result.id,
         proof: result.id,
       });
-      refreshHistory();
+      await refreshHistory();
       body.innerHTML = `
         <div class="preview">
           <p class="success-text">Sent. Transfer ID: ${escapeHtml(result.id || 'pending')}</p>
@@ -479,17 +504,6 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
       body.querySelector('#send-done')!.addEventListener('click', closeModal);
       refreshBalance();
     } catch (err: any) {
-      addHistoryRecord({
-        action: 'send',
-        status: 'failure',
-        title: `Failed to send ${args.amount} ${args.symbol}`,
-        counterparty: args.to,
-        amount: args.amount,
-        currency: args.symbol,
-        coinId: args.coinId,
-        details: err?.message || 'Unknown error',
-      });
-      refreshHistory();
       body.innerHTML = `
         <p class="form-error">${escapeHtml(describeIntentError(err))}</p>
         <div class="modal-actions"><button class="btn-ghost" id="send-close">Close</button></div>
@@ -633,7 +647,7 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
       if (result.success) {
         addHistoryRecord({
           action: 'request_payment',
-          status: 'success',
+          status: 'pending',
           title: `Requested ${args.amount} ${args.symbol}`,
           counterparty: args.to,
           amount: args.amount,
@@ -642,20 +656,7 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
           memo: args.memo,
           details: `Request approved by wallet and sent to ${args.to}`,
         });
-        refreshHistory();
-      } else {
-        addHistoryRecord({
-          action: 'request_payment',
-          status: 'failure',
-          title: `Failed request for ${args.amount} ${args.symbol}`,
-          counterparty: args.to,
-          amount: args.amount,
-          currency: args.symbol,
-          coinId: args.coinId,
-          memo: args.memo,
-          details: result.error || 'Unknown error',
-        });
-        refreshHistory();
+        await refreshHistory();
       }
 
       body.innerHTML = result.success
@@ -665,24 +666,14 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
            <div class="modal-actions"><button class="btn-ghost" id="req-done">Close</button></div>`;
       body.querySelector('#req-done')!.addEventListener('click', closeModal);
     } catch (err: any) {
-      addHistoryRecord({
-        action: 'request_payment',
-        status: 'failure',
-        title: `Failed request for ${args.amount} ${args.symbol}`,
-        counterparty: args.to,
-        amount: args.amount,
-        currency: args.symbol,
-        coinId: args.coinId,
-        memo: args.memo,
-        details: err?.message || 'Unknown error',
-      });
-      refreshHistory();
-      body.innerHTML = `<p class="form-error">${escapeHtml(describeIntentError(err))}</p>
+      body.innerHTML = `
+        <p class="form-error">${escapeHtml(describeIntentError(err))}</p>
         <div class="modal-actions"><button class="btn-ghost" id="req-close">Close</button></div>`;
       body.querySelector('#req-close')!.addEventListener('click', closeModal);
     }
   });
 }
+
 
 async function handlePromptSubmit(text: string) {
   const feedback = el('prompt-feedback');
@@ -733,9 +724,10 @@ export function initApp() {
   onWalletChange(() => {
     renderWalletHeader();
     refreshBalance();
+    void refreshHistory();
   });
 
-  refreshHistory();
+  void refreshHistory();
   renderMarketCard();
 
   el('btn-open-send').addEventListener('click', () => openSendModal());

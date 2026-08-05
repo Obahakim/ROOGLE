@@ -33,6 +33,19 @@ export interface WalletState {
   error: string | null;
 }
 
+export interface WalletHistoryEntry {
+  transferId?: string;
+  type?: string;
+  timestamp?: number;
+  amount?: string;
+  coinId?: string;
+  symbol?: string;
+  senderAddress?: string;
+  senderNametag?: string;
+  recipientAddress?: string;
+  recipientNametag?: string;
+}
+
 let state: WalletState = { status: 'disconnected', identity: null, error: null };
 let connection: AutoConnectResult | null = null;
 
@@ -151,6 +164,15 @@ export async function resolvePeer(identifier: string): Promise<{ directAddress?:
     return await client.query('sphere_resolve', { identifier });
   } catch {
     return null;
+  }
+}
+
+export async function getWalletHistory(): Promise<WalletHistoryEntry[]> {
+  const client = requireClient();
+  try {
+    return await client.query<WalletHistoryEntry[]>('sphere_getHistory');
+  } catch {
+    return [];
   }
 }
 
