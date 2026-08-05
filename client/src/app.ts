@@ -24,6 +24,14 @@ import { addHistoryRecord, clearHistory, exportHistory, loadHistory, saveHistory
 import { addressableTarget, searchMarket, type MarketIntent } from './market';
 import { formatBalance, toSmallestUnits } from './format';
 import { identiconSvg } from './identicon';
+import {
+  classifyPromptIntent,
+  describeMissingSendTokensFields,
+  describeMissingSwapFields,
+  extractSearchMarketArgs,
+  extractSendTokensArgs,
+  extractSwapArgs,
+} from '../../src/lib/extraction';
 
 // ---------------------------------------------------------------------------
 // State
@@ -675,6 +683,33 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
 }
 
 
+function parsePromptLocally(text: string) {
+  const intent = classifyPromptIntent(text);
+
+  if (intent === 'send') {
+    const args = extractSendTokensArgs(text);
+    const missing = describeMissingSendTokensFields({ to: args.to, amount: args.amount });
+    return { intent, args, missing };
+  }
+
+  if (intent === 'search_market') {
+    const args = extractSearchMarketArgs(text);
+    return { intent, args, missing: args.query ? null : 'What market quote are you looking for?' };
+  }
+
+  if (intent === 'swap') {
+    const args = extractSwapArgs(text);
+    const missing = describeMissingSwapFields(args);
+    return { intent, args, missing };
+  }
+
+  return {
+    intent: 'unknown' as const,
+    args: null,
+    missing: 'I can help with sending tokens or requesting a payment. Try something like "send 10 UCT to @hexz".',
+  };
+}
+
 async function handlePromptSubmit(text: string) {
   const feedback = el('prompt-feedback');
   feedback.textContent = '';
@@ -686,14 +721,14 @@ async function handlePromptSubmit(text: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
+    if (!res.ok) throw new Error(`server responded with ${res.status}`);
     parsed = await res.json();
   } catch {
-    feedback.textContent = "Couldn't reach the server — try again.";
-    return;
+    parsed = parsePromptLocally(text);
   }
 
   if (parsed.intent === 'swap') {
-    feedback.textContent = "Swap isn't available — there's no guaranteed way to protect both sides of a token-for-token trade here. Try sending tokens directly, or use \"Request payment\" instead.";
+    feedback.textContent = 'Swap isn\'t available — there\'s no guaranteed way to protect both sides of a token-for-token trade here. Try sending tokens directly, or use "Request payment" instead.';
     return;
   }
 
