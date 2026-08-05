@@ -9,17 +9,17 @@
  */
 
 :root {
-  --bg: #0a0a0a;
-  --surface: #131316;
-  --surface-2: #1c1c20;
-  --border: #2a2a30;
-  --text: #f2f2f0;
-  --text-dim: #8b8b93;
-  --accent: #4fd1c5;
-  --accent-dim: #2c7a72;
-  --accent-ink: #04211e;
-  --danger: #f2555a;
-  --success: #5fd97a;
+  --bg: #120b09;
+  --surface: #24130e;
+  --surface-2: #351d14;
+  --border: #5a2f1e;
+  --text: #f9eee3;
+  --text-dim: #d3b19c;
+  --accent: #d95a1f;
+  --accent-dim: #a33e12;
+  --accent-ink: #1b0905;
+  --danger: #f48c30;
+  --success: #ffb56b;
   --radius: 14px;
   --radius-sm: 8px;
 }
