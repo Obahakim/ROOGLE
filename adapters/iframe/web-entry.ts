@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { config } from '../../config/index';
 import {
   classifyPromptIntent,
+  extractSearchMarketArgs,
   extractSendTokensArgs,
   extractSwapArgs,
   describeMissingSendTokensFields,
