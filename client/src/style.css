@@ -214,10 +214,6 @@ a {
   grid-column: span 2;
 }
 
-.card-activity {
-  grid-column: span 4;
-}
-
 .card-action {
   grid-column: span 1;
   display: flex;
@@ -226,8 +222,11 @@ a {
   min-height: 140px;
 }
 
-.card-activity,
 .card-quotes,
+.card-history {
+  grid-column: span 4;
+}
+
 .card-history {
   grid-column: span 4;
 }
@@ -350,11 +349,16 @@ a {
 
 .listing-row.listing-selectable {
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .listing-row.listing-selectable:hover {
   background: var(--border);
+}
+
+.listing-row.selected {
+  background: rgba(79, 209, 197, 0.15);
+  border-color: var(--accent);
 }
 
 .listing-desc {
@@ -363,6 +367,12 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 70%;
+}
+
+.quote-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .listing-meta,

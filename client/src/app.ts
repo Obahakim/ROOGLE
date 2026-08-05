@@ -15,13 +15,12 @@ import {
   getBalance,
   resolvePeer,
   sendTokens,
-  sendDM,
   describeIntentError,
   requestPayment,
   type Asset,
 } from './wallet';
 import { addHistoryRecord, clearHistory, exportHistory, loadHistory, type HistoryRecord } from './history';
-import { addressableTarget, getRecentListings, searchMarket, type MarketIntent } from './market';
+import { addressableTarget, searchMarket, type MarketIntent } from './market';
 import { formatBalance, toSmallestUnits } from './format';
 import { identiconSvg } from './identicon';
 
@@ -31,9 +30,9 @@ import { identiconSvg } from './identicon';
 
 let balance: Asset[] | null = null;
 let balanceLoading = false;
-let recentListings: MarketIntent[] | null = null;
 let marketResults: MarketIntent[] | null = null;
 let marketQuery: string | null = null;
+let selectedQuote: MarketIntent | null = null;
 let historyRecords: HistoryRecord[] = [];
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
@@ -137,44 +136,6 @@ function renderBalanceCard() {
   `;
 }
 
-// ---------------------------------------------------------------------------
-// Recent market activity card
-// ---------------------------------------------------------------------------
-
-async function refreshRecentListings() {
-  const container = el('card-activity-body');
-  container.innerHTML = `<p class="empty-state">Loading recent activity…</p>`;
-  try {
-    recentListings = await getRecentListings();
-  } catch (err: any) {
-    recentListings = [];
-    console.warn('Could not load recent listings:', err?.message || err);
-  }
-  renderActivityCard();
-}
-
-function renderActivityCard() {
-  const container = el('card-activity-body');
-  if (!recentListings || recentListings.length === 0) {
-    container.innerHTML = `<p class="empty-state">Nothing posted on the market recently.</p>`;
-    return;
-  }
-  container.innerHTML = `
-    <ul class="listing-list">
-      ${recentListings
-        .slice(0, 8)
-        .map(
-          (it) => `
-        <li class="listing-row">
-          <span class="listing-desc">${escapeHtml(it.description)}</span>
-          <span class="listing-meta">${it.price ? `${it.price} ${escapeHtml(it.currency)}` : ''}</span>
-        </li>`
-        )
-        .join('')}
-    </ul>
-  `;
-}
-
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString(undefined, {
     year: 'numeric',
@@ -239,10 +200,10 @@ function renderHistoryCard() {
 }
 
 async function performMarketSearch(query: string) {
-  const container = el('card-quotes-body');
+  selectedQuote = null;
   marketQuery = query;
   marketResults = null;
-  container.innerHTML = `<p class="empty-state">Searching the market for quotes…</p>`;
+  renderMarketCard();
   try {
     marketResults = await searchMarket(query);
   } catch (err: any) {
@@ -258,6 +219,32 @@ async function performMarketSearch(query: string) {
   renderMarketCard();
 }
 
+function selectQuote(intent: MarketIntent) {
+  selectedQuote = intent;
+  renderMarketCard();
+}
+
+function confirmQuoteSelection(intent: MarketIntent) {
+  openModal(
+    'Quote selected',
+    `<div class="preview">
+       <div class="preview-row"><strong>Description</strong><span>${escapeHtml(intent.description)}</span></div>
+       <div class="preview-row"><strong>Price</strong><span>${intent.price ? `${escapeHtml(String(intent.price))} ${escapeHtml(intent.currency)}` : 'N/A'}</span></div>
+       <div class="preview-row"><strong>Agent</strong><span>${escapeHtml(addressableTarget(intent))}</span></div>
+     </div>
+     <div class="modal-actions">
+       <button class="btn-ghost" id="quote-change">Change quote</button>
+       <button class="btn-primary" id="quote-pay">Pay for quote</button>
+     </div>`
+  );
+
+  el('quote-change').addEventListener('click', closeModal);
+  el('quote-pay').addEventListener('click', () => {
+    closeModal();
+    openSendModal({ to: addressableTarget(intent), amount: intent.price ? String(intent.price) : undefined, token: intent.currency });
+  });
+}
+
 function renderMarketCard() {
   const container = el('card-quotes-body');
   container.innerHTML = `
@@ -267,7 +254,7 @@ function renderMarketCard() {
       </label>
       <div class="market-search-actions">
         <button type="submit" class="btn-primary">Search quotes</button>
-        <button type="button" class="btn-ghost" id="market-search-refresh">Refresh recent</button>
+        <button type="button" class="btn-ghost" id="market-search-refresh">Clear</button>
       </div>
     </form>
     ${marketResults === null ? `<p class="empty-state">Search the public market to discover agent quotes.</p>` : ''}
@@ -277,32 +264,46 @@ function renderMarketCard() {
           .slice(0, 10)
           .map(
             (it) => `
-          <li class="listing-row">
+          <li class="listing-row listing-selectable ${selectedQuote?.id === it.id ? 'selected' : ''}" data-quote-id="${escapeHtml(it.id)}">
             <div>
               <strong>${escapeHtml(it.description)}</strong>
               <div class="listing-meta">${it.price ? `${it.price} ${escapeHtml(it.currency)}` : 'No price listed'}</div>
+              <div class="listing-target">${escapeHtml(addressableTarget(it))}</div>
             </div>
-            <div class="listing-target">${escapeHtml(addressableTarget(it))}</div>
+            <button type="button" class="btn-primary btn-compact">Select</button>
           </li>`
           )
           .join('')}
       </ul>
+      ${selectedQuote ? `<div class="quote-actions"><button class="btn-primary" id="quote-pay-now">Pay selected quote</button></div>` : ''}
     ` : marketResults?.length === 0 ? `<p class="empty-state">No quotes matched that search.</p>` : ''}
   `;
 
-  const searchForm = document.getElementById('market-search-form') as HTMLFormElement | null;
-  if (searchForm) {
-    searchForm.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const input = document.getElementById('market-search-input') as HTMLInputElement | null;
-      const query = input?.value.trim();
-      if (query) performMarketSearch(query);
+  const searchForm = container.querySelector<HTMLFormElement>('#market-search-form');
+  searchForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = container.querySelector<HTMLInputElement>('#market-search-input');
+    const query = input?.value.trim();
+    if (query) performMarketSearch(query);
+  });
+
+  container.querySelectorAll<HTMLLIElement>('.listing-row.listing-selectable').forEach((row) => {
+    row.addEventListener('click', () => {
+      const id = row.dataset.quoteId;
+      const quote = marketResults?.find((it) => it.id === id);
+      if (quote) selectQuote(quote);
     });
+  });
+
+  const payNowButton = container.querySelector<HTMLButtonElement>('#quote-pay-now');
+  if (payNowButton && selectedQuote) {
+    payNowButton.addEventListener('click', () => confirmQuoteSelection(selectedQuote!));
   }
 
-  document.getElementById('market-search-refresh')?.addEventListener('click', () => {
+  container.querySelector<HTMLButtonElement>('#market-search-refresh')?.addEventListener('click', () => {
     marketQuery = null;
     marketResults = null;
+    selectedQuote = null;
     renderMarketCard();
   });
 }
@@ -734,13 +735,11 @@ export function initApp() {
     refreshBalance();
   });
 
-  refreshRecentListings();
   refreshHistory();
   renderMarketCard();
 
   el('btn-open-send').addEventListener('click', () => openSendModal());
   el('btn-open-request').addEventListener('click', () => openRequestPaymentModal());
-  el('btn-refresh-activity').addEventListener('click', () => refreshRecentListings());
   el('btn-refresh-balance').addEventListener('click', () => refreshBalance());
 
   const promptForm = el<HTMLFormElement>('prompt-form');
