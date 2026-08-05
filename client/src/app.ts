@@ -20,7 +20,8 @@ import {
   requestPayment,
   type Asset,
 } from './wallet';
-import { getRecentListings, type MarketIntent } from './market';
+import { addHistoryRecord, clearHistory, exportHistory, loadHistory, type HistoryRecord } from './history';
+import { addressableTarget, getRecentListings, searchMarket, type MarketIntent } from './market';
 import { formatBalance, toSmallestUnits } from './format';
 import { identiconSvg } from './identicon';
 
@@ -31,6 +32,9 @@ import { identiconSvg } from './identicon';
 let balance: Asset[] | null = null;
 let balanceLoading = false;
 let recentListings: MarketIntent[] | null = null;
+let marketResults: MarketIntent[] | null = null;
+let marketQuery: string | null = null;
+let historyRecords: HistoryRecord[] = [];
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const found = document.getElementById(id);
@@ -169,6 +173,138 @@ function renderActivityCard() {
         .join('')}
     </ul>
   `;
+}
+
+function formatTimestamp(value: number): string {
+  return new Date(value).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function refreshHistory() {
+  historyRecords = loadHistory();
+  renderHistoryCard();
+}
+
+function renderHistoryCard() {
+  const container = el('card-history-body');
+  if (!historyRecords || historyRecords.length === 0) {
+    container.innerHTML = `<p class="empty-state">No local activity recorded yet. Actions you approve in your wallet will appear here.</p>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="history-actions">
+      <button class="btn-ghost" id="history-clear">Clear history</button>
+      <button class="btn-primary" id="history-export">Export proof bundle</button>
+    </div>
+    <ul class="history-list">
+      ${historyRecords
+        .slice(0, 10)
+        .map(
+          (record) => `
+        <li class="history-row">
+          <div>
+            <strong>${escapeHtml(record.title)}</strong>
+            <div class="history-meta">${escapeHtml(formatTimestamp(record.timestamp))}</div>
+          </div>
+          <div class="history-details">
+            ${record.counterparty ? `<span>${escapeHtml(record.counterparty)}</span>` : ''}
+            ${record.amount ? `<span>${escapeHtml(record.amount)} ${escapeHtml(record.currency || '')}</span>` : ''}
+            ${record.memo ? `<span>${escapeHtml(record.memo)}</span>` : ''}
+          </div>
+        </li>`
+        )
+        .join('')}
+    </ul>
+  `;
+
+  el('history-clear').addEventListener('click', () => {
+    clearHistory();
+    refreshHistory();
+  });
+  el('history-export').addEventListener('click', () => {
+    const blob = new Blob([exportHistory()], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'roogle-history.json';
+    link.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+async function performMarketSearch(query: string) {
+  const container = el('card-quotes-body');
+  marketQuery = query;
+  marketResults = null;
+  container.innerHTML = `<p class="empty-state">Searching the market for quotes…</p>`;
+  try {
+    marketResults = await searchMarket(query);
+  } catch (err: any) {
+    marketResults = [];
+    console.warn('Could not search market:', err?.message || err);
+  }
+  addHistoryRecord({
+    action: 'market_search',
+    status: 'success',
+    title: `Market search: ${query}`,
+    details: `Searched for quotes matching: ${query}`,
+  });
+  renderMarketCard();
+}
+
+function renderMarketCard() {
+  const container = el('card-quotes-body');
+  container.innerHTML = `
+    <form id="market-search-form" class="stack">
+      <label>Search market quotes
+        <input id="market-search-input" type="text" placeholder="e.g. 10 UCT offers" value="${escapeHtml(marketQuery ?? '')}" />
+      </label>
+      <div class="market-search-actions">
+        <button type="submit" class="btn-primary">Search quotes</button>
+        <button type="button" class="btn-ghost" id="market-search-refresh">Refresh recent</button>
+      </div>
+    </form>
+    ${marketResults === null ? `<p class="empty-state">Search the public market to discover agent quotes.</p>` : ''}
+    ${marketResults && marketResults.length > 0 ? `
+      <ul class="listing-list">
+        ${marketResults
+          .slice(0, 10)
+          .map(
+            (it) => `
+          <li class="listing-row">
+            <div>
+              <strong>${escapeHtml(it.description)}</strong>
+              <div class="listing-meta">${it.price ? `${it.price} ${escapeHtml(it.currency)}` : 'No price listed'}</div>
+            </div>
+            <div class="listing-target">${escapeHtml(addressableTarget(it))}</div>
+          </li>`
+          )
+          .join('')}
+      </ul>
+    ` : marketResults?.length === 0 ? `<p class="empty-state">No quotes matched that search.</p>` : ''}
+  `;
+
+  const searchForm = document.getElementById('market-search-form') as HTMLFormElement | null;
+  if (searchForm) {
+    searchForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = document.getElementById('market-search-input') as HTMLInputElement | null;
+      const query = input?.value.trim();
+      if (query) performMarketSearch(query);
+    });
+  }
+
+  document.getElementById('market-search-refresh')?.addEventListener('click', () => {
+    marketQuery = null;
+    marketResults = null;
+    renderMarketCard();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +457,18 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
     try {
       const smallest = toSmallestUnits(args.amount, args.decimals);
       const result = await sendTokens({ to: args.to, amount: smallest, coinId: args.coinId });
+      const record = addHistoryRecord({
+        action: 'send',
+        status: 'success',
+        title: `Sent ${args.amount} ${args.symbol}`,
+        counterparty: resolvedLabel,
+        amount: args.amount,
+        currency: args.symbol,
+        coinId: args.coinId,
+        resultId: result.id,
+        proof: result.id,
+      });
+      refreshHistory();
       body.innerHTML = `
         <div class="preview">
           <p class="success-text">Sent. Transfer ID: ${escapeHtml(result.id || 'pending')}</p>
@@ -330,6 +478,17 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
       body.querySelector('#send-done')!.addEventListener('click', closeModal);
       refreshBalance();
     } catch (err: any) {
+      addHistoryRecord({
+        action: 'send',
+        status: 'failure',
+        title: `Failed to send ${args.amount} ${args.symbol}`,
+        counterparty: args.to,
+        amount: args.amount,
+        currency: args.symbol,
+        coinId: args.coinId,
+        details: err?.message || 'Unknown error',
+      });
+      refreshHistory();
       body.innerHTML = `
         <p class="form-error">${escapeHtml(describeIntentError(err))}</p>
         <div class="modal-actions"><button class="btn-ghost" id="send-close">Close</button></div>
@@ -470,6 +629,34 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
       const smallest = toSmallestUnits(args.amount, args.decimals);
       const result = await requestPayment({ to: args.to, amount: smallest, coinId: args.coinId, memo: args.memo || undefined });
 
+      if (result.success) {
+        addHistoryRecord({
+          action: 'request_payment',
+          status: 'success',
+          title: `Requested ${args.amount} ${args.symbol}`,
+          counterparty: args.to,
+          amount: args.amount,
+          currency: args.symbol,
+          coinId: args.coinId,
+          memo: args.memo,
+          details: `Request approved by wallet and sent to ${args.to}`,
+        });
+        refreshHistory();
+      } else {
+        addHistoryRecord({
+          action: 'request_payment',
+          status: 'failure',
+          title: `Failed request for ${args.amount} ${args.symbol}`,
+          counterparty: args.to,
+          amount: args.amount,
+          currency: args.symbol,
+          coinId: args.coinId,
+          memo: args.memo,
+          details: result.error || 'Unknown error',
+        });
+        refreshHistory();
+      }
+
       body.innerHTML = result.success
         ? `<div class="preview"><p class="success-text">Request sent to ${escapeHtml(args.to)}.</p></div>
            <div class="modal-actions"><button class="btn-primary" id="req-done">Done</button></div>`
@@ -477,6 +664,18 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
            <div class="modal-actions"><button class="btn-ghost" id="req-done">Close</button></div>`;
       body.querySelector('#req-done')!.addEventListener('click', closeModal);
     } catch (err: any) {
+      addHistoryRecord({
+        action: 'request_payment',
+        status: 'failure',
+        title: `Failed request for ${args.amount} ${args.symbol}`,
+        counterparty: args.to,
+        amount: args.amount,
+        currency: args.symbol,
+        coinId: args.coinId,
+        memo: args.memo,
+        details: err?.message || 'Unknown error',
+      });
+      refreshHistory();
       body.innerHTML = `<p class="form-error">${escapeHtml(describeIntentError(err))}</p>
         <div class="modal-actions"><button class="btn-ghost" id="req-close">Close</button></div>`;
       body.querySelector('#req-close')!.addEventListener('click', closeModal);
@@ -488,7 +687,7 @@ async function handlePromptSubmit(text: string) {
   const feedback = el('prompt-feedback');
   feedback.textContent = '';
 
-  let parsed: { intent: 'send' | 'swap' | 'unknown'; args: any; missing: string | null };
+  let parsed: { intent: 'send' | 'swap' | 'search_market' | 'unknown'; args: any; missing: string | null };
   try {
     const res = await fetch('/api/parse', {
       method: 'POST',
@@ -503,6 +702,15 @@ async function handlePromptSubmit(text: string) {
 
   if (parsed.intent === 'swap') {
     feedback.textContent = "Swap isn't available — there's no guaranteed way to protect both sides of a token-for-token trade here. Try sending tokens directly, or use \"Request payment\" instead.";
+    return;
+  }
+
+  if (parsed.intent === 'search_market') {
+    if (parsed.missing) {
+      feedback.textContent = parsed.missing;
+      return;
+    }
+    performMarketSearch(parsed.args.query || text);
     return;
   }
 
@@ -527,6 +735,8 @@ export function initApp() {
   });
 
   refreshRecentListings();
+  refreshHistory();
+  renderMarketCard();
 
   el('btn-open-send').addEventListener('click', () => openSendModal());
   el('btn-open-request').addEventListener('click', () => openRequestPaymentModal());

@@ -226,6 +226,72 @@ a {
   min-height: 140px;
 }
 
+.card-activity,
+.card-quotes,
+.card-history {
+  grid-column: span 4;
+}
+
+.history-actions,
+.market-search-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.history-list,
+.listing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.listing-row,
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+}
+
+.listing-row strong,
+.history-row strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.listing-meta,
+.history-meta,
+.history-details {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.listing-target {
+  color: var(--accent);
+  font-size: 13px;
+  text-align: right;
+}
+
+.card-quotes input[type="text"] {
+  width: 100%;
+}
+
+.card-history .history-details span {
+  display: inline-block;
+  margin-right: 10px;
+}
+
+.card-history .history-actions {
+  justify-content: flex-start;
+}
+
 .card-head {
   display: flex;
   align-items: center;

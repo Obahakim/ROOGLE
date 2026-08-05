@@ -28,7 +28,7 @@ export interface SwapArgs {
   amount: string | null;
 }
 
-export type PromptIntent = 'send' | 'swap' | 'unknown';
+export type PromptIntent = 'send' | 'swap' | 'search_market' | 'unknown';
 
 /**
  * Curated common token symbols, plus a generic ALL-CAPS 2-5 letter word as a
@@ -70,9 +70,22 @@ function extractRecipient(text: string): string | null {
  */
 export function classifyPromptIntent(text: string): PromptIntent {
   const lower = text.toLowerCase();
+  if (/\b(quotes?|offers|market|search (the )?market|find offers|find quotes?)\b/.test(lower)) return 'search_market';
   if (/\bswap\b/.test(lower)) return 'swap';
   if (/\bsend\b/.test(lower)) return 'send';
   return 'unknown';
+}
+
+export function extractSearchMarketArgs(text: string): { query: string | null } {
+  const queryMatch = text.match(/(?:quotes?|offers?)\s+(?:for|to|on|in)?\s*(.+)$/i);
+  if (queryMatch && queryMatch[1]) {
+    return { query: queryMatch[1].trim() };
+  }
+  const simpleMatch = text.match(/search\s+(?:the\s+)?market\s+for\s+(.+)$/i);
+  if (simpleMatch && simpleMatch[1]) {
+    return { query: simpleMatch[1].trim() };
+  }
+  return { query: text.trim() };
 }
 
 export function extractSendTokensArgs(text: string): SendTokensArgs {

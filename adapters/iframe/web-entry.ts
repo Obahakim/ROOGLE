@@ -68,6 +68,11 @@ function handleParse(text: string) {
     return { intent, args, missing };
   }
 
+  if (intent === 'search_market') {
+    const args = extractSearchMarketArgs(text);
+    return { intent, args, missing: args.query ? null : 'What market quote are you looking for?'};
+  }
+
   if (intent === 'swap') {
     const args = extractSwapArgs(text);
     const missing = describeMissingSwapFields(args);
