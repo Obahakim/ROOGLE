@@ -3,8 +3,8 @@
 Central place for configuration and environment handling.
 
 Contains:
-- Loading of .env values
-- Safe default settings aligned with ROOGLE vision (e.g. always confirm money movement)
-- Constants that should not be scattered around the codebase
+- Environment loading and safe defaults
+- Runtime configuration for the local Node server
+- Sphere network selection used by the browser wallet client
 
 Never hardcode secrets. Use environment variables for anything sensitive.

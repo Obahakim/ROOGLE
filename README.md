@@ -1,71 +1,63 @@
 # ROOGLE
 
-**ROOGLE** is the friendly conversational orchestrator for the Unicity Sphere.
+**ROOGLE** is a browser-native Unicity Sphere wallet dashboard.
 
-You talk to ROOGLE in plain English (or any language). It listens, understands what you want, and either handles the request directly using its own tools or intelligently discovers and connects you to the best specialist agent in the entire Unicity ecosystem. Everything stays simple, safe, and jargon-free.
+It connects to the user's own wallet via Sphere Connect, shows real token balances, lets users send tokens and request payments, discovers market quotes, and stores transaction history locally in the browser.
 
-ROOGLE runs as a live agent inside Unicity Sphere (as an iframe or DM bot) powered by the Sphere SDK.
+ROOGLE is not a server-side wallet or LLM service. Every value action is approved by the user's wallet in the browser, and local history is persisted in `localStorage`.
 
-See the full vision in [docs/PROJECT_OVERVIEW.md](./docs/PROJECT_OVERVIEW.md).
+## What ROOGLE does now
 
-## Quick Start
+- Connect to a Sphere wallet using the user's own wallet app or extension
+- Display real on-chain token balances
+- Send tokens to addresses or nametags
+- Create payment requests that the recipient approves in their own wallet
+- Search public market quotes and pay selected quotes
+- Keep a local transaction history with `pending` → `success` refresh behavior
+- Run as a lightweight static + Node server app
+
+## Quick start
 
 ```bash
-# 1. Copy environment file and fill in keys (especially GROK_API_KEY + SPHERE_MNEMONIC)
-cp .env.example .env
-
-# 2. Install deps
 npm install
-
-# 3. Run the Iframe Agent (recommended for testing)
-npm run dev:iframe
-# Open http://localhost:3001 in your browser
-
-# Other options
-npm run dev          # basic core
-npx tsx scripts/test-conversation.ts
+npm run build:client
+npm run build:server
+npm start
 ```
 
-## Running as an Iframe Agent
-
-The primary way to use ROOGLE is as an **iframe agent**.
+For development:
 
 ```bash
-npm run dev:iframe
+npm run dev
 ```
 
-This starts a minimal Node server on port 3001 (or `PORT`) that:
-- Initializes the SphereClient using your `.env` (real SDK when `SPHERE_MNEMONIC` is set).
-- Serves a clean Tailwind chat UI.
-- Exposes `/chat` that uses the full core (`handleUserMessage`, Grok + all tools).
+`npm run dev` starts `adapters/iframe/web-entry.ts` in watch mode and serves the built `public/` assets.
 
-### Loading inside Sphere
+## Project structure
 
-1. Make the page publicly accessible (deploy the static output or run a persistent server).
-2. In Sphere (sphere.unicity.network), use the agent registration / marketplace flow or direct deep-link to embed the URL as an iframe agent.
-3. Sphere will load your page inside an iframe and may communicate via `postMessage` (basic support is present; extend `window.addEventListener('message')` if needed).
+- `client/` — browser UI source, styles, and favicon
+- `public/` — built static app output
+- `adapters/iframe/` — lightweight server entrypoint and parse API
+- `config/` — runtime configuration and environment handling
+- `src/` — shared utilities and prompt extraction logic
+- `tests/` — unit and end-to-end test suites
 
-For local development you can also manually create a test page:
-```html
-<iframe src="http://localhost:3001" width="100%" height="600"></iframe>
-```
+## How it works
 
-See `adapters/iframe/web-entry.ts` for the implementation.
+- The app is served from `public/`
+- The client connects to Sphere using `@unicitylabs/sphere-sdk/connect/browser`
+- Wallet actions are executed with the user's wallet approval
+- Transaction history is saved locally in the browser, not on a backend
 
-## Structure
+## Useful commands
 
-- `docs/` — All documentation
-- `src/` — Agent source code (orchestrator, tools, LLM layer)
-- `adapters/` — Iframe + DM entry points
-- `scripts/` — dev tools, tests, connection checker
-- `config/` — supporting areas
-
-## Development Scripts
-
-- `npm run dev:iframe` — Iframe agent with chat UI (uses real SDK when possible)
-- `npm run start:iframe` — same as above
-- `npx tsx scripts/check-sphere-connection.ts` — quick real vs mock status
+- `npm run dev` — start development server with live reload via `tsx`
+- `npm run build:client` — bundle the client UI into `public/`
+- `npm run build:server` — compile the Node server entrypoint
+- `npm run build` — build both client and server
+- `npm start` — run the compiled server
+- `npm test` — run the test suite
 
 ## License
 
-To be determined.
+MIT

@@ -1,10 +1,10 @@
 # tests/
 
-Automated tests for ROOGLE.
+Testing support for ROOGLE.
 
-- unit/ — Small focused tests for individual functions, tools, and prompt behavior.
-- e2e/ — Full conversation simulations ("user says X → ROOGLE routes correctly or acts").
+- `unit/` — focused tests for individual utilities, prompt parsing, and server behavior
+- `e2e/` — integration-style scenarios for the user-facing prompt and parse flow
 
-Even in early phases, we keep this folder to encourage test-driven development of the orchestrator and tools.
+The repository includes tests as a development aid even though the primary app behavior is a browser wallet dashboard.
 
 Conversation tests are especially important because the product is the chat experience.
