@@ -184,6 +184,9 @@ export interface SendParams {
 
 export async function sendTokens(params: SendParams): Promise<{ id: string; status: string }> {
   const client = requireClient();
+  // Debug: log outbound send intent parameters (non-sensitive)
+  // eslint-disable-next-line no-console
+  console.debug('ROOGLE: wallet.sendTokens called', { to: params.to, coinId: params.coinId, amount: params.amount });
   return client.intent('send', params as unknown as Record<string, unknown>);
 }
 
@@ -231,5 +234,8 @@ export interface PaymentRequestParams {
 
 export async function requestPayment(params: PaymentRequestParams): Promise<{ success: boolean; error?: string }> {
   const client = requireClient();
+  // Debug: log outbound payment_request intent parameters (non-sensitive)
+  // eslint-disable-next-line no-console
+  console.debug('ROOGLE: wallet.requestPayment called', { to: params.to, coinId: params.coinId, amount: params.amount, memo: params.memo });
   return client.intent('payment_request', params as unknown as Record<string, unknown>);
 }

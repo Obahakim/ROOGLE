@@ -274,7 +274,33 @@ function confirmQuoteSelection(intent: MarketIntent) {
   el('quote-change').addEventListener('click', closeModal);
   el('quote-pay').addEventListener('click', () => {
     closeModal();
-    openSendModal({ to: addressableTarget(intent), amount: intent.price ? String(intent.price) : undefined, token: intent.currency });
+    // Attempt to auto-select a coinId that matches the quote currency from the user's balance.
+    const currentBalance = balance ?? [];
+    const match = currentBalance.find((a) => String(intent.currency || '').toUpperCase() === String(a.symbol || '').toUpperCase());
+
+    if (intent.price == null) {
+      openModal('Quote has no price', `<p class="form-error">This quote does not include a price to pay.</p><div class="modal-actions"><button class="btn-ghost" id="quote-pay-close">Close</button></div>`);
+      el('quote-pay-close').addEventListener('click', closeModal);
+      return;
+    }
+
+    if (!match) {
+      // Wallet doesn't have that token; allow user to open send modal to choose manually.
+      openModal(
+        'Token not in wallet',
+        `<p class="form-error">Your connected wallet doesn't hold ${escapeHtml(String(intent.currency || 'the quoted token'))}. You can open the Send dialog to choose a different token.</p>
+         <div class="modal-actions"><button class="btn-ghost" id="quote-pay-close">Close</button>
+         <button class="btn-primary" id="quote-pay-open-send">Open Send dialog</button></div>`
+      );
+      el('quote-pay-close').addEventListener('click', closeModal);
+      el('quote-pay-open-send').addEventListener('click', () => {
+        closeModal();
+        openSendModal({ to: addressableTarget(intent), amount: String(intent.price), token: intent.currency });
+      });
+      return;
+    }
+
+    openSendModal({ to: addressableTarget(intent), amount: String(intent.price), coinId: match.coinId, token: intent.currency });
   });
 }
 
@@ -380,6 +406,7 @@ interface SendPrefill {
   to?: string | null;
   amount?: string | null;
   token?: string | null;
+  coinId?: string | null;
 }
 
 function openSendModal(prefill: SendPrefill = {}) {
@@ -422,7 +449,7 @@ function openSendModal(prefill: SendPrefill = {}) {
             .map(
               (a) =>
                 `<option value="${a.coinId}" data-decimals="${a.decimals}" data-symbol="${a.symbol}" ${
-                  prefill.token && prefill.token.toUpperCase() === a.symbol.toUpperCase() ? 'selected' : ''
+                  (prefill.coinId && prefill.coinId === a.coinId) || (prefill.token && prefill.token.toUpperCase() === a.symbol.toUpperCase()) ? 'selected' : ''
                 }>${escapeHtml(a.symbol)} — ${formatBalance(a.totalAmount, a.decimals, '')} available</option>`
             )
             .join('')}
@@ -487,10 +514,21 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
 
   body.querySelector('#send-cancel')!.addEventListener('click', closeModal);
   body.querySelector('#send-confirm')!.addEventListener('click', async () => {
+    // Prevent sending if recipient couldn't be resolved.
+    if (!resolved) {
+      const errEl = body.querySelector('.form-error');
+      if (errEl) errEl.textContent = 'Please resolve the recipient before sending.';
+      return;
+    }
+
     body.innerHTML = `<p class="empty-state">Check your wallet to approve this send…</p>`;
     try {
-      const smallest = toSmallestUnits(args.amount, args.decimals);
-      const result = await sendTokens({ to: args.to, amount: smallest, coinId: args.coinId });
+    const smallest = toSmallestUnits(args.amount, args.decimals);
+    // Debug: log the exact params we're about to send to the wallet
+    // (non-sensitive: recipient, coinId, amount string)
+    // eslint-disable-next-line no-console
+    console.debug('ROOGLE: sendTokens params', { to: args.to, coinId: args.coinId, amountSmallest: smallest });
+    const result = await sendTokens({ to: args.to, amount: smallest, coinId: args.coinId });
       addHistoryRecord({
         action: 'send',
         status: 'pending',
@@ -649,8 +687,11 @@ async function openRequestPaymentPreview(args: { to: string; amount: string; coi
   body.querySelector('#req-preview-confirm')!.addEventListener('click', async () => {
     body.innerHTML = `<p class="empty-state">Check your wallet to approve sending this request…</p>`;
     try {
-      const smallest = toSmallestUnits(args.amount, args.decimals);
-      const result = await requestPayment({ to: args.to, amount: smallest, coinId: args.coinId, memo: args.memo || undefined });
+    const smallest = toSmallestUnits(args.amount, args.decimals);
+    // Debug: log the exact params we're about to request via the wallet
+    // eslint-disable-next-line no-console
+    console.debug('ROOGLE: requestPayment params', { to: args.to, coinId: args.coinId, amountSmallest: smallest, memo: args.memo });
+    const result = await requestPayment({ to: args.to, amount: smallest, coinId: args.coinId, memo: args.memo || undefined });
 
       if (result.success) {
         addHistoryRecord({
