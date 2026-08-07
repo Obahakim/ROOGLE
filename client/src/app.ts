@@ -20,8 +20,12 @@ import {
   getWalletHistory,
   type Asset,
 } from './wallet';
+<<<<<<< HEAD
+import { addressableTarget, searchMarket, type MarketIntent } from './market';
+=======
 import { addHistoryRecord, clearHistory, exportHistory, loadHistory, saveHistory, type HistoryRecord } from './history';
 import { addressableTarget, searchMarket, type MarketIntent } from './market';
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
 import { formatBalance, toSmallestUnits } from './format';
 import { identiconSvg } from './identicon';
 import {
@@ -145,6 +149,13 @@ function renderBalanceCard() {
   `;
 }
 
+<<<<<<< HEAD
+async function performMarketSearch(query: string) {
+  selectedQuote = null;
+  marketQuery = query;
+  marketResults = null;
+  renderMarketCard();
+=======
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString(undefined, {
     year: 'numeric',
@@ -159,7 +170,14 @@ async function refreshPendingHistoryStatuses(): Promise<void> {
   const pendingRecords = historyRecords.filter((record) => record.status === 'pending' && record.resultId);
   if (pendingRecords.length === 0) return;
 
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
   try {
+<<<<<<< HEAD
+    marketResults = await searchMarket(query);
+  } catch (err: any) {
+    marketResults = [];
+    console.warn('Could not search market:', err?.message || err);
+=======
     const walletHistory = await getWalletHistory();
     const completedIds = new Set(walletHistory.map((entry) => entry.transferId).filter(Boolean));
     let updated = false;
@@ -177,9 +195,50 @@ async function refreshPendingHistoryStatuses(): Promise<void> {
     }
   } catch {
     // Ignore refresh failures; keep pending entries until next attempt.
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
   }
+<<<<<<< HEAD
+  addHistoryRecord({
+    action: 'market_search',
+    status: 'success',
+    title: `Market search: ${query}`,
+    details: `Searched for quotes matching: ${query}`,
+  });
+  renderMarketCard();
+=======
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
 }
 
+<<<<<<< HEAD
+function selectQuote(intent: MarketIntent) {
+  selectedQuote = intent;
+  renderMarketCard();
+}
+
+function confirmQuoteSelection(intent: MarketIntent) {
+  openModal(
+    'Quote selected',
+    `<div class="preview">
+       <div class="preview-row"><strong>Description</strong><span>${escapeHtml(intent.description)}</span></div>
+       <div class="preview-row"><strong>Price</strong><span>${intent.price ? `${escapeHtml(String(intent.price))} ${escapeHtml(intent.currency)}` : 'N/A'}</span></div>
+       <div class="preview-row"><strong>Agent</strong><span>${escapeHtml(addressableTarget(intent))}</span></div>
+     </div>
+     <div class="modal-actions">
+       <button class="btn-ghost" id="quote-change">Change quote</button>
+       <button class="btn-primary" id="quote-pay">Pay for quote</button>
+     </div>`
+  );
+
+  el('quote-change').addEventListener('click', closeModal);
+  el('quote-pay').addEventListener('click', () => {
+    closeModal();
+    openSendModal({ to: addressableTarget(intent), amount: intent.price ? String(intent.price) : undefined, token: intent.currency });
+  });
+}
+
+function renderMarketCard() {
+  const container = el('card-quotes-body');
+=======
 async function refreshHistory(): Promise<void> {
   historyRecords = loadHistory();
   await refreshPendingHistoryStatuses();
@@ -194,7 +253,39 @@ function renderHistoryCard() {
     return;
   }
 
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
   container.innerHTML = `
+<<<<<<< HEAD
+    <form id="market-search-form" class="stack">
+      <label>Search market quotes
+        <input id="market-search-input" type="text" placeholder="e.g. 10 UCT offers" value="${escapeHtml(marketQuery ?? '')}" />
+      </label>
+      <div class="market-search-actions">
+        <button type="submit" class="btn-primary">Search quotes</button>
+        <button type="button" class="btn-ghost" id="market-search-refresh">Clear</button>
+      </div>
+    </form>
+    ${marketResults === null ? `<p class="empty-state">Search the public market to discover agent quotes.</p>` : ''}
+    ${marketResults && marketResults.length > 0 ? `
+      <ul class="listing-list">
+        ${marketResults
+          .slice(0, 10)
+          .map(
+            (it) => `
+          <li class="listing-row listing-selectable ${selectedQuote?.id === it.id ? 'selected' : ''}" data-quote-id="${escapeHtml(it.id)}">
+            <div>
+              <strong>${escapeHtml(it.description)}</strong>
+              <div class="listing-meta">${it.price ? `${it.price} ${escapeHtml(it.currency)}` : 'No price listed'}</div>
+              <div class="listing-target">${escapeHtml(addressableTarget(it))}</div>
+            </div>
+            <button type="button" class="btn-primary btn-compact">Select</button>
+          </li>`
+          )
+          .join('')}
+      </ul>
+      ${selectedQuote ? `<div class="quote-actions"><button class="btn-primary" id="quote-pay-now">Pay selected quote</button></div>` : ''}
+    ` : marketResults?.length === 0 ? `<p class="empty-state">No quotes matched that search.</p>` : ''}
+=======
     <div class="history-actions">
       <button class="btn-ghost" id="history-clear">Clear history</button>
       <button class="btn-primary" id="history-export">Export proof bundle</button>
@@ -221,7 +312,38 @@ function renderHistoryCard() {
         )
         .join('')}
     </ul>
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
   `;
+<<<<<<< HEAD
+
+  const searchForm = container.querySelector<HTMLFormElement>('#market-search-form');
+  searchForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = container.querySelector<HTMLInputElement>('#market-search-input');
+    const query = input?.value.trim();
+    if (query) performMarketSearch(query);
+  });
+
+  container.querySelectorAll<HTMLLIElement>('.listing-row.listing-selectable').forEach((row) => {
+    row.addEventListener('click', () => {
+      const id = row.dataset.quoteId;
+      const quote = marketResults?.find((it) => it.id === id);
+      if (quote) selectQuote(quote);
+    });
+  });
+
+  const payNowButton = container.querySelector<HTMLButtonElement>('#quote-pay-now');
+  if (payNowButton && selectedQuote) {
+    payNowButton.addEventListener('click', () => confirmQuoteSelection(selectedQuote!));
+  }
+
+  container.querySelector<HTMLButtonElement>('#market-search-refresh')?.addEventListener('click', () => {
+    marketQuery = null;
+    marketResults = null;
+    selectedQuote = null;
+    renderMarketCard();
+  });
+=======
 
   el('history-clear').addEventListener('click', () => {
     clearHistory();
@@ -236,6 +358,7 @@ function renderHistoryCard() {
     link.click();
     URL.revokeObjectURL(url);
   });
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
 }
 
 async function performMarketSearch(query: string) {
@@ -762,8 +885,13 @@ export function initApp() {
     void refreshHistory();
   });
 
+<<<<<<< HEAD
+  renderMarketCard();
+  refreshHistory();
+=======
   void refreshHistory();
   renderMarketCard();
+>>>>>>> 675a468426c7d54eebc0c8cc2189355c9d6fc268
 
   el('btn-open-send').addEventListener('click', () => openSendModal());
   el('btn-open-request').addEventListener('click', () => openRequestPaymentModal());
