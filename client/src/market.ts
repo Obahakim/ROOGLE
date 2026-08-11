@@ -5,12 +5,11 @@
  * protocol has no market-search RPC (by design: listings are a public
  * bulletin board, not something that needs wallet permission to read).
  *
- * So this runs its OWN Sphere instance, entirely in the browser, with an
- * auto-generated throwaway identity. It never touches a mnemonic that
- * belongs to a real person, never persists anything, never signs a
- * transaction, and never appears in the wallet's UI. It exists purely to
- * read the public market feed — closer to an anonymous API client than a
- * wallet.
+ * So this runs its OWN Sphere instance, entirely in the browser, without
+ * initializing wallet money custody. Market search is a public REST operation
+ * and does not need a mnemonic, wallet-api composition, or signing identity.
+ * It never touches a real person's wallet and exists purely to read the public
+ * market feed — closer to an anonymous API client than a wallet.
  */
 
 import { Sphere } from '@unicitylabs/sphere-sdk';
@@ -43,7 +42,6 @@ async function getMarketSphere() {
       const { sphere } = await Sphere.init({
         ...providers,
         network: __SPHERE_NETWORK__ as any,
-        autoGenerate: true,
       });
       sphereInstance = sphere;
       return sphere;
