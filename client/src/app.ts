@@ -155,28 +155,35 @@ function formatTimestamp(value: number): string {
   });
 }
 
+function comparableIds(value: string): string[] {
+  const normalized = value.trim().toLowerCase();
+  return [normalized, normalized.replace(/^(transfer|transaction|tx|result)[:_-]?/, '')].filter(Boolean);
+}
+
 async function refreshPendingHistoryStatuses(): Promise<void> {
   const pendingRecords = historyRecords.filter((record) => record.status === 'pending' && record.resultId);
   if (pendingRecords.length === 0) return;
 
   try {
     const walletHistory = await getWalletHistory();
-    const completedIds = new Set(walletHistory.map((entry) => entry.transferId).filter(Boolean));
-    let updated = false;
-
-    historyRecords = historyRecords.map((record) => {
-      if (record.status === 'pending' && record.resultId && completedIds.has(record.resultId)) {
-        updated = true;
-        return { ...record, status: 'success' };
-      }
-      return record;
-    });
-
-    if (updated) {
-      saveHistory(historyRecords);
+    const byId = new Map<string, 'success' | 'failure'>();
+    for (const entry of walletHistory) {
+      if (!entry.transferId) continue;
+      const status = entry.status === 'failure' ? 'failure' : entry.status === 'success' ? 'success' : null;
+      if (!status) continue;
+      for (const id of comparableIds(entry.transferId)) byId.set(id, status);
     }
+    let updated = false;
+    historyRecords = historyRecords.map((record) => {
+      if (record.status !== 'pending' || !record.resultId) return record;
+      const status = comparableIds(record.resultId).map((id) => byId.get(id)).find(Boolean);
+      if (!status) return record;
+      updated = true;
+      return { ...record, status };
+    });
+    if (updated) saveHistory(historyRecords);
   } catch {
-    // Ignore refresh failures; keep pending entries until next attempt.
+    // Ignore refresh failures; keep pending entries until the next attempt.
   }
 }
 
@@ -196,6 +203,7 @@ function renderHistoryCard() {
 
   container.innerHTML = `
     <div class="history-actions">
+      <button class="btn-ghost" id="history-refresh">Refresh status</button>
       <button class="btn-ghost" id="history-clear">Clear history</button>
       <button class="btn-primary" id="history-export">Export proof bundle</button>
     </div>
@@ -210,6 +218,7 @@ function renderHistoryCard() {
             <div class="history-meta">
               ${escapeHtml(formatTimestamp(record.timestamp))}
               <span class="history-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
+              ${record.action === 'request_payment' && record.status === 'pending' ? '<small class="history-note">Request delivery is confirmed; payment status is not exposed by the wallet.</small>' : ''}
             </div>
           </div>
           <div class="history-details">
@@ -223,6 +232,13 @@ function renderHistoryCard() {
     </ul>
   `;
 
+  el('history-refresh').addEventListener('click', async () => {
+    const button = el<HTMLButtonElement>('history-refresh');
+    button.disabled = true;
+    button.textContent = 'Refreshing…';
+    await refreshHistory();
+    renderHistoryCard();
+  });
   el('history-clear').addEventListener('click', () => {
     clearHistory();
     refreshHistory();
@@ -762,6 +778,11 @@ export function initApp() {
   });
 
   void refreshHistory();
+  window.setInterval(() => {
+    if (getWalletState().status === 'connected' && document.visibilityState === 'visible') {
+      void refreshHistory();
+    }
+  }, 15000);
   renderMarketCard();
 
   el('btn-open-send').addEventListener('click', () => openSendModal());

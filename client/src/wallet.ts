@@ -33,9 +33,12 @@ export interface WalletState {
   error: string | null;
 }
 
+export type WalletHistoryStatus = 'pending' | 'success' | 'failure' | 'unknown';
+
 export interface WalletHistoryEntry {
   transferId?: string;
   type?: string;
+  status?: WalletHistoryStatus;
   timestamp?: number;
   amount?: string;
   coinId?: string;
@@ -44,6 +47,29 @@ export interface WalletHistoryEntry {
   senderNametag?: string;
   recipientAddress?: string;
   recipientNametag?: string;
+}
+
+function normalizeHistoryEntry(raw: unknown): WalletHistoryEntry {
+  const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawId = value.transferId ?? value.transactionId ?? value.txId ?? value.id ?? value.resultId;
+  const rawStatus = String(value.status ?? value.state ?? value.transferStatus ?? '').toLowerCase();
+  const status: WalletHistoryStatus =
+    ['complete', 'completed', 'success', 'succeeded', 'confirmed', 'settled'].includes(rawStatus) ? 'success' :
+    ['failed', 'failure', 'cancelled', 'canceled', 'rejected', 'error'].includes(rawStatus) ? 'failure' :
+    ['pending', 'processing', 'submitted', 'broadcast'].includes(rawStatus) ? 'pending' : 'unknown';
+  return {
+    transferId: typeof rawId === 'string' ? rawId : undefined,
+    type: typeof value.type === 'string' ? value.type : undefined,
+    status,
+    timestamp: typeof value.timestamp === 'number' ? value.timestamp : undefined,
+    amount: typeof value.amount === 'string' || typeof value.amount === 'number' ? String(value.amount) : undefined,
+    coinId: typeof value.coinId === 'string' ? value.coinId : undefined,
+    symbol: typeof value.symbol === 'string' ? value.symbol : undefined,
+    senderAddress: typeof value.senderAddress === 'string' ? value.senderAddress : undefined,
+    senderNametag: typeof value.senderNametag === 'string' ? value.senderNametag : undefined,
+    recipientAddress: typeof value.recipientAddress === 'string' ? value.recipientAddress : undefined,
+    recipientNametag: typeof value.recipientNametag === 'string' ? value.recipientNametag : undefined,
+  };
 }
 
 let state: WalletState = { status: 'disconnected', identity: null, error: null };
@@ -170,7 +196,9 @@ export async function resolvePeer(identifier: string): Promise<{ directAddress?:
 export async function getWalletHistory(): Promise<WalletHistoryEntry[]> {
   const client = requireClient();
   try {
-    return await client.query<WalletHistoryEntry[]>('sphere_getHistory');
+    const history = await client.query<unknown>('sphere_getHistory');
+    const entries = Array.isArray(history) ? history : ((history as { entries?: unknown[] })?.entries ?? []);
+    return entries.map(normalizeHistoryEntry);
   } catch {
     return [];
   }
