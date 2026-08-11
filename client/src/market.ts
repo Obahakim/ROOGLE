@@ -14,6 +14,7 @@
 
 import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { createWalletApiProviders } from '@unicitylabs/sphere-sdk/impl/shared/wallet-api';
 
 export interface MarketIntent {
   id: string;
@@ -34,14 +35,19 @@ async function getMarketSphere() {
   if (sphereInstance) return sphereInstance;
   if (!initPromise) {
     initPromise = (async () => {
-      const providers = createBrowserProviders({
+      const baseProviders = createBrowserProviders({
         network: __SPHERE_NETWORK__ as any,
         market: true,
       });
-      
+      const providers = createWalletApiProviders(baseProviders, {
+        network: __SPHERE_NETWORK__ as any,
+        baseUrl: 'https://wallet-api.unicity.network',
+      });
+
       const { sphere } = await Sphere.init({
         ...providers,
         network: __SPHERE_NETWORK__ as any,
+        autoGenerate: true,
       });
       sphereInstance = sphere;
       return sphere;
