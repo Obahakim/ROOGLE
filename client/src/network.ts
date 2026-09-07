@@ -24,7 +24,9 @@ export function getSphereNetwork(): string {
 }
 
 export function getConnectNetwork() {
-  return selectedNetwork === 'mainnet' ? SPHERE_NETWORKS.mainnet : SPHERE_NETWORKS.testnet2;
+  // SDK 0.14.1 predates the exported mainnet descriptor. Connect accepts
+  // the same canonical network shape for forward-compatible dApps.
+  return selectedNetwork === 'mainnet' ? { id: 1, name: 'mainnet' } : SPHERE_NETWORKS.testnet2;
 }
 
 export function setNetwork(network: NetworkName): void {
