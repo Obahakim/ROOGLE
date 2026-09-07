@@ -18,10 +18,13 @@ import {
   describeIntentError,
   requestPayment,
   getWalletHistory,
+  onWalletTransfer,
   type Asset,
+  type WalletTransferEvent,
 } from './wallet';
 import { addHistoryRecord, clearHistory, exportHistory, loadHistory, saveHistory, type HistoryRecord } from './history';
-import { addressableTarget, searchMarket, type MarketIntent } from './market';
+import { addressableTarget, resetMarketSphere, searchMarket, type MarketIntent } from './market';
+import { getNetwork, onNetworkChange, setNetwork, type NetworkName } from './network';
 import { formatBalance, toSmallestUnits } from './format';
 import { identiconSvg } from './identicon';
 import {
@@ -57,10 +60,16 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 function renderWalletHeader() {
   const state = getWalletState();
   const container = el('wallet-status');
+  const network = getNetwork();
+  const networkNav = `
+    <nav class="network-nav" aria-label="Network">
+      <button class="network-tab ${network === 'mainnet' ? 'active' : ''}" data-network="mainnet" aria-current="${network === 'mainnet' ? 'page' : 'false'}">Mainnet</button>
+      <button class="network-tab ${network === 'testnet' ? 'active' : ''}" data-network="testnet" aria-current="${network === 'testnet' ? 'page' : 'false'}">Testnet</button>
+    </nav>`;
 
   if (state.status === 'connected' && state.identity) {
     const label = state.identity.nametag ? `@${state.identity.nametag}` : shortAddr(state.identity.chainPubkey);
-    container.innerHTML = `
+    container.innerHTML = `${networkNav}
       <div class="wallet-pill">
         <span class="identicon">${identiconSvg(state.identity.chainPubkey, 28)}</span>
         <span class="wallet-label">${label}</span>
@@ -69,14 +78,29 @@ function renderWalletHeader() {
     `;
     el('btn-disconnect').addEventListener('click', () => disconnectWallet());
   } else if (state.status === 'connecting') {
-    container.innerHTML = `<button class="btn-primary" disabled>Connecting…</button>`;
+    container.innerHTML = `${networkNav}<button class="btn-primary" disabled>Connecting…</button>`;
   } else {
-    container.innerHTML = `
+    container.innerHTML = `${networkNav}
       <button class="btn-primary" id="btn-connect">Connect wallet</button>
       ${state.error ? `<div class="error-text">${escapeHtml(state.error)}</div>` : ''}
     `;
     el('btn-connect').addEventListener('click', () => connectWallet());
   }
+
+  container.querySelectorAll<HTMLButtonElement>('[data-network]').forEach((button) => {
+    button.addEventListener('click', () => selectNetwork(button.dataset.network as NetworkName));
+  });
+}
+
+async function selectNetwork(network: NetworkName): Promise<void> {
+  if (network === getNetwork()) return;
+  await disconnectWallet();
+  setNetwork(network);
+  balance = null;
+  balanceLoading = false;
+  resetMarketSphere();
+  renderBalanceCard();
+  renderMarketCard();
 }
 
 function shortAddr(addr: string): string {
@@ -165,7 +189,7 @@ async function refreshPendingHistoryStatuses(): Promise<void> {
     let updated = false;
 
     historyRecords = historyRecords.map((record) => {
-      if (record.status === 'pending' && record.resultId && completedIds.has(record.resultId)) {
+      if (record.status === 'pending' && record.resultId && completedIds.has(record.resultId) && record.deliveryPending !== true) {
         updated = true;
         return { ...record, status: 'success' };
       }
@@ -210,6 +234,8 @@ function renderHistoryCard() {
             <div class="history-meta">
               ${escapeHtml(formatTimestamp(record.timestamp))}
               <span class="history-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
+              ${record.deliveryPending ? '<span class="history-status pending">delivery pending</span>' : ''}
+            }
             </div>
           </div>
           <div class="history-details">
@@ -238,13 +264,17 @@ function renderHistoryCard() {
   });
 }
 async function performMarketSearch(query: string) {
+  const searchNetwork = getNetwork();
   selectedQuote = null;
   marketQuery = query;
   marketResults = null;
   renderMarketCard();
   try {
-    marketResults = await searchMarket(query);
+    const results = await searchMarket(query);
+    if (getNetwork() !== searchNetwork) return;
+    marketResults = results;
   } catch (err: any) {
+    if (getNetwork() !== searchNetwork) return;
     marketResults = [];
     console.warn('Could not search market:', err?.message || err);
   }
@@ -273,7 +303,12 @@ function confirmQuoteSelection(intent: MarketIntent) {
   el('quote-change').addEventListener('click', closeModal);
   el('quote-pay').addEventListener('click', () => {
     closeModal();
-    openSendModal({ to: addressableTarget(intent), amount: intent.price ? String(intent.price) : undefined, token: intent.currency });
+    openSendModal({
+      to: addressableTarget(intent),
+      amount: intent.price ? String(intent.price) : undefined,
+      token: intent.currency,
+      memo: `ROOGLE quote ${intent.id}`,
+    });
   });
 }
 
@@ -379,6 +414,7 @@ interface SendPrefill {
   to?: string | null;
   amount?: string | null;
   token?: string | null;
+  memo?: string | null;
 }
 
 function openSendModal(prefill: SendPrefill = {}) {
@@ -463,11 +499,11 @@ function openSendModal(prefill: SendPrefill = {}) {
 
     const asset = assets.find((a) => a.coinId === coinId);
     errorEl.textContent = '';
-    openSendPreview({ to, amount, coinId, symbol: asset?.symbol || '', decimals: asset?.decimals ?? 0 });
+    openSendPreview({ to, amount, coinId, symbol: asset?.symbol || '', decimals: asset?.decimals ?? 0, memo: prefill.memo });
   });
 }
 
-async function openSendPreview(args: { to: string; amount: string; coinId: string; symbol: string; decimals: number }) {
+async function openSendPreview(args: { to: string; amount: string; coinId: string; symbol: string; decimals: number; memo?: string | null }) {
   const body = openModal('Confirm send', `<p class="empty-state">Resolving recipient…</p>`);
   const resolved = await resolvePeer(args.to).catch(() => null);
   const resolvedLabel = resolved?.nametag ? `@${resolved.nametag}` : resolved?.directAddress || args.to;
@@ -489,22 +525,31 @@ async function openSendPreview(args: { to: string; amount: string; coinId: strin
     body.innerHTML = `<p class="empty-state">Check your wallet to approve this send…</p>`;
     try {
       const smallest = toSmallestUnits(args.amount, args.decimals);
-      const result = await sendTokens({ to: args.to, amount: smallest, coinId: args.coinId });
+      const result = await sendTokens({
+        to: resolved?.directAddress || args.to,
+        amount: smallest,
+        coinId: args.coinId,
+        memo: args.memo,
+      });
       addHistoryRecord({
         action: 'send',
-        status: 'pending',
+        status: result.deliveryPending ? 'pending' : 'success',
         title: `Sent ${args.amount} ${args.symbol}`,
         counterparty: resolvedLabel,
         amount: args.amount,
         currency: args.symbol,
+        memo: args.memo || undefined,
         coinId: args.coinId,
         resultId: result.id,
         proof: result.id,
+        network: getNetwork(),
+        deliveryPending: result.deliveryPending === true,
+        details: result.deliveryPending ? 'Certified on-chain; wallet delivery is pending.' : 'Delivered to the recipient wallet.',
       });
       await refreshHistory();
       body.innerHTML = `
         <div class="preview">
-          <p class="success-text">Sent. Transfer ID: ${escapeHtml(result.id || 'pending')}</p>
+          <p class="${result.deliveryPending ? 'hint-text' : 'success-text'}">${result.deliveryPending ? 'Payment certified; delivery to the recipient wallet is still pending.' : 'Payment delivered to the recipient wallet.'} Transfer ID: ${escapeHtml(result.id || 'pending')}</p>
         </div>
         <div class="modal-actions"><button class="btn-primary" id="send-done">Done</button></div>
       `;
@@ -750,6 +795,28 @@ async function handlePromptSubmit(text: string) {
   }
 }
 
+function handleWalletTransfer(event: WalletTransferEvent): void {
+  if (event.type === 'incoming') {
+    void refreshBalance();
+    void refreshHistory();
+    return;
+  }
+
+  const transferId = event.transferId || event.id;
+  if (!transferId || event.type !== 'confirmed' || event.deliveryPending === true || event.deliveryState === 'pending-delivery') return;
+
+  let updated = false;
+  historyRecords = historyRecords.map((record) => {
+    if (record.resultId !== transferId || record.status !== 'pending') return record;
+    updated = true;
+    return { ...record, status: 'success', deliveryPending: false, details: 'Delivered to the recipient wallet.' };
+  });
+  if (updated) {
+    saveHistory(historyRecords);
+    renderHistoryCard();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
@@ -760,9 +827,16 @@ export function initApp() {
     refreshBalance();
     void refreshHistory();
   });
+  onWalletTransfer(handleWalletTransfer);
+
+  onNetworkChange(() => {
+    renderWalletHeader();
+    renderBalanceCard();
+  });
 
   void refreshHistory();
   renderMarketCard();
+  renderWalletHeader();
 
   el('btn-open-send').addEventListener('click', () => openSendModal());
   el('btn-open-request').addEventListener('click', () => openRequestPaymentModal());

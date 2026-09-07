@@ -15,6 +15,7 @@
 
 import { Sphere } from '@unicitylabs/sphere-sdk';
 import { createBrowserProviders } from '@unicitylabs/sphere-sdk/impl/browser';
+import { getSphereNetwork } from './network';
 
 export interface MarketIntent {
   id: string;
@@ -31,18 +32,23 @@ export interface MarketIntent {
 let sphereInstance: any = null;
 let initPromise: Promise<any> | null = null;
 
+export function resetMarketSphere(): void {
+  sphereInstance = null;
+  initPromise = null;
+}
+
 async function getMarketSphere() {
   if (sphereInstance) return sphereInstance;
   if (!initPromise) {
     initPromise = (async () => {
       const providers = createBrowserProviders({
-        network: __SPHERE_NETWORK__ as any,
+        network: getSphereNetwork() as any,
         market: true,
       });
       
       const { sphere } = await Sphere.init({
         ...providers,
-        network: __SPHERE_NETWORK__ as any,
+        network: getSphereNetwork() as any,
         autoGenerate: true,
       });
       sphereInstance = sphere;

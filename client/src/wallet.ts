@@ -9,7 +9,8 @@
  */
 
 import { autoConnect, type AutoConnectResult } from '@unicitylabs/sphere-sdk/connect/browser';
-import { PERMISSION_SCOPES, WALLET_EVENTS, ERROR_CODES, SPHERE_NETWORKS } from '@unicitylabs/sphere-sdk/connect';
+import { PERMISSION_SCOPES, WALLET_EVENTS, ERROR_CODES } from '@unicitylabs/sphere-sdk/connect';
+import { getConnectNetwork } from './network';
 
 export interface WalletIdentity {
   chainPubkey: string;
@@ -46,11 +47,28 @@ export interface WalletHistoryEntry {
   recipientNametag?: string;
 }
 
+export interface WalletTransferResult {
+  id: string;
+  status: string;
+  deliveryPending?: boolean;
+  deliveryState?: 'landed' | 'pending-delivery';
+}
+
+export interface WalletTransferEvent {
+  id?: string;
+  transferId?: string;
+  status?: string;
+  deliveryPending?: boolean;
+  deliveryState?: 'landed' | 'pending-delivery';
+  type: 'incoming' | 'confirmed' | 'delivery_pending' | 'failed';
+}
+
 let state: WalletState = { status: 'disconnected', identity: null, error: null };
 let connection: AutoConnectResult | null = null;
 
 type Listener = (s: WalletState) => void;
 const listeners = new Set<Listener>();
+const transferListeners = new Set<(event: WalletTransferEvent) => void>();
 
 function setState(patch: Partial<WalletState>) {
   state = { ...state, ...patch };
@@ -67,6 +85,15 @@ export function getWalletState(): WalletState {
   return state;
 }
 
+export function onWalletTransfer(l: (event: WalletTransferEvent) => void): () => void {
+  transferListeners.add(l);
+  return () => transferListeners.delete(l);
+}
+
+function emitWalletTransfer(event: WalletTransferEvent): void {
+  transferListeners.forEach((listener) => listener(event));
+}
+
 // The live Sphere wallet app — used as the popup fallback (P3) when ROOGLE
 // isn't embedded in Sphere and the browser extension isn't installed.
 const WALLET_URL = 'https://sphere.unicity.network';
@@ -81,6 +108,7 @@ const REQUESTED_PERMISSIONS = [
   PERMISSION_SCOPES.DM_REQUEST,
   PERMISSION_SCOPES.DM_READ,
   PERMISSION_SCOPES.PAYMENT_REQUEST,
+  PERMISSION_SCOPES.EVENTS_SUBSCRIBE,
 ];
 
 function describeConnectError(err: any): string {
@@ -108,7 +136,7 @@ export async function connectWallet(): Promise<void> {
       // The raw SDK still accepts the string 'testnet' as an alias of this
       // same network (confirmed in source), but Connect validates by this
       // numeric id specifically.
-      network: SPHERE_NETWORKS.testnet2,
+      network: getConnectNetwork(),
       permissions: REQUESTED_PERMISSIONS,
     });
     connection = result;
@@ -120,6 +148,10 @@ export async function connectWallet(): Promise<void> {
     result.client.on(WALLET_EVENTS.IDENTITY_CHANGED, () => {
       setState({ identity: result.client.walletIdentity });
     });
+    result.client.on('transfer:incoming', (event: any) => emitWalletTransfer({ ...event, type: 'incoming' }));
+    result.client.on('transfer:confirmed', (event: any) => emitWalletTransfer({ ...event, type: 'confirmed' }));
+    result.client.on('transfer:delivery_pending', (event: any) => emitWalletTransfer({ ...event, type: 'delivery_pending' }));
+    result.client.on('transfer:failed', (event: any) => emitWalletTransfer({ ...event, type: 'failed' }));
 
     // Survive a page refresh in popup mode.
     try {
@@ -177,12 +209,14 @@ export async function getWalletHistory(): Promise<WalletHistoryEntry[]> {
 }
 
 export interface SendParams {
+export interface SendParams {
   to: string;
   amount: string; // smallest units — convert with format.ts before calling
   coinId: string;
+  memo?: string;
 }
 
-export async function sendTokens(params: SendParams): Promise<{ id: string; status: string }> {
+export async function sendTokens(params: SendParams): Promise<WalletTransferResult> {
   const client = requireClient();
   return client.intent('send', params as unknown as Record<string, unknown>);
 }

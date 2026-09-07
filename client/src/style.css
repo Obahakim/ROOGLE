@@ -104,6 +104,37 @@ a {
   padding: 6px 14px 6px 6px;
 }
 
+#wallet-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.network-nav {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.network-tab {
+  background: transparent;
+  color: var(--text-dim);
+  border: 0;
+  border-radius: 5px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.network-tab:hover,
+.network-tab.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 .identicon svg {
   display: block;
 }
@@ -502,6 +533,15 @@ a {
 }
 
 @media (max-width: 720px) {
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  #wallet-status {
+    flex-wrap: wrap;
+  }
+
   .bento {
     grid-template-columns: repeat(2, 1fr);
   }

@@ -15,6 +15,8 @@ export interface HistoryRecord {
   resultId?: string;
   proof?: string;
   details?: string;
+  network?: 'testnet' | 'mainnet';
+  deliveryPending?: boolean;
 }
 
 const STORAGE_KEY = 'roogle:history';
