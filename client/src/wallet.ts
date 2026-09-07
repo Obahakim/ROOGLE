@@ -209,7 +209,6 @@ export async function getWalletHistory(): Promise<WalletHistoryEntry[]> {
 }
 
 export interface SendParams {
-export interface SendParams {
   to: string;
   amount: string; // smallest units — convert with format.ts before calling
   coinId: string;
